@@ -1,3 +1,4 @@
 ---
-collections:
-  - name: frr.frr
+roles:
+  - name: mrlesmithjr.frr
+  - name: geerlingguy.mysql
