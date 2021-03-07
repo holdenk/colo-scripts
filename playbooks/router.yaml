@@ -1,0 +1,31 @@
+# Loosly based on https://galaxy.ansible.com/frr/frr?extIdCarryOver=true&sc_cid=701f2000001OH7YAAW
+---
+- hosts: router
+  tasks:
+  - name: Add frr dpkg key
+    ansible.builtin.apt_key:
+      url: https://deb.frrouting.org/frr/keys.asc
+      state: present
+    become: yes
+  - name: Add frr repo
+    ansible.builtin.apt_repository:
+      repo: deb-src https://deb.frrouting.org/frr {{ ansible_distribution_release | lower }} frr-stable
+      state: present
+    become: yes
+  - name: Install frr
+    apt:
+      pkg:
+      - frr
+      - frr-pythontools
+      state: latest
+      update_cache: yes
+    become: yes
+  - name: Collect all facts from the device
+    frr.frr.frr_facts:
+      gather_subset: all
+  - name: configure global bgp as AS399306
+    frr.frr.frr_bgp:
+      config:
+        bgp_as: 399306
+        log_neighbor_changes: True
+      operation: merge
