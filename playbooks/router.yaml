@@ -1,6 +1,15 @@
 ---
 - hosts: router
   tasks:
+  - name: Install some networking tools
+    apt:
+      pkg:
+        - inetutils-traceroute
+        - inetutils-ping
+        - axel
+        - nmap
+        - tshark
+    become: yes
   - name: configure global bgp as AS399306
     include_role:
       name: mrlesmithjr.frr
@@ -19,11 +28,68 @@
         ripd: false
         ripngd: false
         zebra: true
+      frr_prefix_list:
+        Bad_IPs:
+          05 permit:
+            prefix: 192.168.88.0/24
+            match: ge 32
+          10 permit:
+            prefix: 172.16.0.0/16
+            match: le 32
+#        Announce:
+#          05 permit:
+#            prefix: 2602:FCB1::/36
+#          10 deny:
+#            prefix: :::/0
+      frr_prefix_list_v6:
+        Bad_IPs:
+          05 permit:
+            prefix: 1234:5678::/32
+            match: ge 128
+        Announce:
+          05 permit:
+            prefix: 2602:FCB1::/36
+          10 deny:
+            prefix: ::/0
+      frr_route_map:
+        announce:
+          permit 10:
+            prefix_list: Announce
+          deny 20:
+            []
       frr_bgp:
         asns:
           399306:
             log_neighbor_changes: true
             no_ebgp_requires_policy: true
+            other:
+              - "bgp bestpath as-path multipath-relax"
+              - "no bgp network import-check"
+            neighbors:
+              206.80.238.253:
+                asn: 33495
+              206.80.238.254:
+                asn: 33495
+              "2001:504:91::253":
+                asn: 33495
+                description: "fcix"
+                af_v6:
+                  - "activate"
+              "2001:504:91::254":
+                asn: 33495
+                description: "fcix"
+                af_v6:
+                  - "activate"
+              "fd00:2001:470:2::1":
+                asn: 6939
+                description: "he.net"
+                af_v6:
+                  - "activate"
+        listen_range:
+          - 172.18.0.12/30
+          - fe80::3eec:efff:fe44:b791/64
+        networks_v6:
+          - 2602:FCB1::/36
         redistribute:
           - bgp
           - connected
@@ -34,3 +100,31 @@
           - bgp
           - connected
           - kernel
+      frr_static:
+        0/0: 172.18.0.13
+#      frr_static_v6:
+#        ::/0 fd00:2001:470:2::1
+      frr_interfaces:
+# Top RJ45 copper next to the SFP port, linked to HE
+        eno6:
+          ip:
+            - 172.18.0.12/30
+          ipv6:
+            - fd00:2001:470:2::/126
+# SFP port to local switch
+        eno7:
+          ip:
+            - 64.71.157.128/27
+          ipv6:
+            - 2001:470:1:993::/64
+            - 2602:FCB1::/36
+          other:
+            - "no ipv6 nd suppress-ra"
+# SFP port to FCIX
+        eno8:
+          ip:
+            - 206.80.238.127/24
+          ipv6:
+            - fe80::3eec:efff:fe44:b791/64
+          other:
+            - "no ipv6 nd suppress-ra"
