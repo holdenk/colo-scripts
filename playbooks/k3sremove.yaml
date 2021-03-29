@@ -1,0 +1,13 @@
+---
+# Cleanup old install if desired
+- hosts: kubernetes
+  tasks:
+  - name: Remove k3s install
+    ansible.builtin.shell: "k3s-uninstall.sh || k3s-agent-uninstall.sh"
+    become: true
+  - name: Remove ceph
+    ansible.builtin.shell: "rm -rf /var/lib/ceph; rm -rf /var/lib/rook"
+    become: true
+  - name: Zap
+    ansible.builtin.shell: "/zap || echo \"nozap\""
+    become: true

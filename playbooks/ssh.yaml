@@ -1,0 +1,31 @@
+---
+- hosts: all
+  tasks:
+  - name: Add the user 'holden' with a bash shell, appending the group 'sudo'
+    ansible.builtin.user:
+      name: holden
+      shell: /bin/bash
+      groups: sudo
+      append: yes
+  - name: pull keys from server
+    uri:
+      url: https://github.com/holdenk.keys
+      return_content: True
+    register: keys
+    failed_when: "'ssh-rsa' not in keys.content"
+  - name: Configure SSH access
+    authorized_key:
+      user: holden
+      state: present
+      key: "{{ keys.content }}"
+  - name: Configure root SSH access
+    authorized_key:
+      user: root
+      state: present
+      key: "{{ keys.content }}"
+    become: true
+  - name: Make everyone have a public key
+    ansible.builtin.shell: "ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub"
+    args:
+      creates: "/root/.ssh/id_rsa.pub"
+    become: true
