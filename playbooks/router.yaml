@@ -36,27 +36,25 @@
           10 permit:
             prefix: 172.16.0.0/16
             match: le 32
-#        Announce:
-#          05 permit:
-#            prefix: 2602:FCB1::/36
-#          10 deny:
-#            prefix: :::/0
+          Announcev4:
+            10 deny:
+              prefix: any
       frr_prefix_list_v6:
         Bad_IPs:
           05 permit:
             prefix: 1234:5678::/32
             match: ge 128
-        Announce:
+        Announcev6:
           05 permit:
             prefix: 2602:FCB1::/36
           10 deny:
-            prefix: ::/0
-      frr_route_map:
-        announce:
-          permit 10:
-            prefix_list: Announce
-          deny 20:
-            []
+            prefix: any
+# TODO: IPv6?
+#      frr_route_map:
+#        set-nexthop-he:
+#          permit 10:
+#            prefix: any
+#        set-nexthop-
       frr_bgp:
         asns:
           399306:
@@ -66,58 +64,107 @@
               - "bgp bestpath as-path multipath-relax"
               - "no bgp network import-check"
             neighbors:
+              he:
+                asn: 6939
+                is_peer_group: true
+              fcix:
+                asn: 33495
+                is_peer_group: true
+              hev6:
+                asn: 6939
+                is_peer_group: true
+              fcixv6:
+                asn: 33495
+                is_peer_group: true
+              206.80.238.10:
+                asn: 43126
+                other:
+                  - "prefix-list Announce out"
+              "2001:504:91::10":
+                asn: 43126
+                other:
+                  - "prefix-list Announce out"
+                af_v6:
+                  - "activate"
+                  - "prefix-list Announcev6 out"
               206.80.238.253:
                 asn: 33495
+                next_hop_self: true
+                peer_group: fcix
+                other:
+                  - "prefix-list Announce out"
               206.80.238.254:
                 asn: 33495
+                next_hop_self: true
+                peer_group: fcix
+                other:
+                  - "prefix-list Announce out"
               "2001:504:91::253":
                 asn: 33495
+                peer_group: fcixv6
                 description: "fcix"
+                next_hop_self: true
+                other:
+                  - "prefix-list Announce out"
                 af_v6:
                   - "activate"
+                  - "prefix-list Announcev6 out"
               "2001:504:91::254":
                 asn: 33495
+                peer_group: fcixv6
                 description: "fcix"
+                next_hop_self: true
+                other:
+                  - "prefix-list Announce out"
                 af_v6:
                   - "activate"
+                  - "prefix-list Announcev6 out"
               "fd00:2001:470:2::1":
                 asn: 6939
                 description: "he.net"
+                peer_group: hev6
+                other:
+                  - "prefix-list Announce out"
                 af_v6:
                   - "activate"
-        listen_range:
-          - 172.18.0.12/30
-          - fe80::3eec:efff:fe44:b791/64
-        networks_v6:
-          - 2602:FCB1::/36
-        redistribute:
-          - bgp
-          - connected
-          - kernel
-          - ospf
-          - static
-        redistribute_v6:
-          - bgp
-          - connected
-          - kernel
+                  - "prefix-list Announcev6 out"
+#            listen_range:
+#              172.18.0.12/30: he
+#              fd00:2001:470:2::2: hev6
+#              fe80::3eec:efff:fe44:b791/64: fcixv6
+            networks_v6:
+              - 2602:FCB1::/36
+            redistribute:
+#              - bgp
+              - connected
+              - kernel
+              - ospf
+              - static
+            redistribute_v6:
+#              - bgp
+              - connected
+              - kernel
       frr_static:
         0/0: 172.18.0.13
-#      frr_static_v6:
-#        ::/0 fd00:2001:470:2::1
+      frr_static_v6:
+        "::/0": fd00:2001:470:2::1
+        "2602:FCB1::/36": eno7
       frr_interfaces:
 # Top RJ45 copper next to the SFP port, linked to HE
         eno6:
           ip:
             - 172.18.0.12/30
           ipv6:
-            - fd00:2001:470:2::/126
+            - fd00:2001:470:2::2/126
+          other:
+            - "no ipv6 nd suppress-ra"
 # SFP port to local switch
         eno7:
           ip:
             - 64.71.157.128/27
           ipv6:
-            - 2001:470:1:993::/64
-            - 2602:FCB1::/36
+            - 2001:470:1:993::1/64
+            - 2602:FCB1::1/36
           other:
             - "no ipv6 nd suppress-ra"
 # SFP port to FCIX
@@ -125,6 +172,6 @@
           ip:
             - 206.80.238.127/24
           ipv6:
-            - fe80::3eec:efff:fe44:b791/64
+            - 2001:504:91::127/64
           other:
             - "no ipv6 nd suppress-ra"
