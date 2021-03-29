@@ -1,0 +1,129 @@
+---
+- hosts: localhost
+  tasks:
+  - name: Create a metallb-system namespace
+    community.kubernetes.k8s:
+      name: mettallb-system
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Install metallb
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml; kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/metallb.yaml"
+  - name: Create metallb secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+
+        metadata:
+          name: memberlist
+          namespace: metallb-system
+
+        type: Opaque
+
+        data:
+          secretkey: "{{metallb_key}}"
+      state: present
+  - name: Configure metallb
+    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/colo-scripts/metallb-config.yaml"
+  - name: Install helm
+    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
+    args:
+      creates: /usr/local/bin/helm
+    become: true
+  - name: Add MinIO chart
+    community.kubernetes.helm_repository:
+      name: minio
+      repo_url: "https://operator.min.io/"
+  - name: Add Traefik chart
+    community.kubernetes.helm_repository:
+      name: traefik
+      repo_url: "https://helm.traefik.io/traefik/"
+  - name: Add Rook Ceph chart
+    community.kubernetes.helm_repository:
+      name: rook-release
+      repo_url: "https://charts.rook.io/release"
+  - name: Add cert-manager chart
+    community.kubernetes.helm_repository:
+      name: jetstack
+      repo_url: "https://charts.jetstack.io"
+  - name: Deploy cert manager
+    community.kubernetes.helm:
+      name: cert-manager
+      chart_ref: "jetstack/cert-manager"
+      release_namespace: cert-manager
+      chart_version: v1.2.0
+      create_namespace: true
+  - name: Deploy trafeik
+    community.kubernetes.helm:
+      name: traefik
+      chart_ref: traefik/traefik
+      release_namespace: traefik-system
+      create_namespace: true
+      values:
+        deployment:
+           kind: Daemonset
+        ingressClass:
+          enabled: true
+          isDefaultClass: true
+        service:
+          spec:
+            loadBalancerIP: 64.71.157.158
+  - name: Deploy rook ceph
+    community.kubernetes.helm:
+      name: rook-ceph
+      chart_ref: rook-release/rook-ceph
+      release_namespace: rook-ceph
+      create_namespace: true
+  - name: Configure ceph cluster
+    ansible.builtin.shell: "(kubectl get cephcluster.ceph.rook.io/rook-ceph -n rook-ceph || kubectl apply -n rook-ceph -f /home/holden/repos/colo-scripts/rook-ceph-cluster.yaml)"
+  - name: Deploy minio operator
+    community.kubernetes.helm:
+      name: minio-operator
+      chart_ref: minio/minio-operator
+      release_namespace: minio-operator
+      # See https://github.com/minio/operator/blob/bcf42334589cf04005348d9c448e072d254b4874/helm/minio-operator/values.yaml
+      values:
+        tenants:
+          - name: minio1
+            image:
+              repository: minio/minio
+              tag: RELEASE.2021-03-01T04-20-55Z
+              pullPolicy: IfNotPresent
+            secrets:
+              name: minio1-secret
+              accessKey: "{{minio_accesskey}}"
+              secretKey: "{{minio_secretkey}}"
+            scheduler: {}
+            certificate:
+              externalCertSecret: {}
+              requestAutoCert: true
+              certConfig: {}
+            podManagementPolicy: Parallel
+            env: {}
+            serviceMetadata: {}
+            priorityClassName : ""
+            console:
+              image:
+                repository: minio/console
+                tag: v0.6.3
+                pullPolicy: IfNotPresent
+              replicaCount: 1
+              secrets:
+                name: console-secret
+                passphrase: "{{minio_secretkey}}"
+                salt: ThisIsAVeryLongPasswordForExample
+                accessKey: "{{minio_accesskey}}"
+                secretKey: "{{minio_secretkey}}"
+            s3:
+              bucketDNS: false
+            pools:
+              - servers: 5
+                volumesPerServer: 2
+                size: 10Gi
+                storageClassName: local-path
+            mountPath: /export
+            subPath: /data
+            metrics:
+              enable: true
+      create_namespace: true
