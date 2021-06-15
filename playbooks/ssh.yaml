@@ -7,7 +7,16 @@
       shell: /bin/bash
       groups: sudo
       append: yes
-  - name: pull keys from server
+  - name: create user private keys if not present
+    ansible.builtin.shell: "mkdir ~/.ssh; ssh-keygen  -N '' -f ~/.ssh/id_rsa"
+    args:
+      creates: "~/.ssh/id_rsa"
+  - name: create root private keys if not present
+    ansible.builtin.shell: "mkdir ~/.ssh; ssh-keygen  -N '' -f ~/.ssh/id_rsa"
+    args:
+      creates: "/root/.ssh/id_rsa"
+    become: true
+  - name: pull keys from github
     uri:
       url: https://github.com/holdenk.keys
       return_content: True
@@ -25,7 +34,24 @@
       key: "{{ keys.content }}"
     become: true
   - name: Make everyone have a public key
-    ansible.builtin.shell: "ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub"
+    ansible.builtin.shell: "mkdir -p /root/.ssh; (ssh-keygen -y -f /root/.ssh/id_rsa > /root/.ssh/id_rsa.pub)"
     args:
       creates: "/root/.ssh/id_rsa.pub"
     become: true
+
+  # Reflexive root access (I know :/ needed for k3sup)
+  - name: Fetch the keyfile from the node to master
+    fetch: 
+      src: "~/.ssh/id_rsa.pub"
+      dest: "buffer/{{ansible_hostname}}-id_rsa.pub"
+      flat: yes
+    become: yes
+
+  - name: Copy the key add to authorized_keys using Ansible module
+    authorized_key:
+      user: root
+      state: present
+      key: "{{ lookup('file','buffer/{{item}}-id_rsa.pub')}}"
+    with_items: 
+      - "{{ groups['kubernetes'] }}"
+    become: yes

@@ -1,4 +1,23 @@
 ---
+- hosts: rpki
+  tasks:
+  - name: Add an Apt signing key, uses whichever key is at the URL
+    ansible.builtin.apt_key:
+      url: https://packages.nlnetlabs.nl/aptkey.asc
+      state: present
+    become: yes
+  - name: Add routinator
+    ansible.builtin.apt_repository:
+      repo: "deb https://packages.nlnetlabs.nl/linux/ubuntu/ groovy main"
+    become: yes
+  - name: Install routinator server
+    apt:
+      pkg:
+        - rsync
+        - build-essential
+        - routinator
+      state: latest
+    become: yes
 - hosts: router
   tasks:
   - name: Install some networking tools
@@ -9,11 +28,16 @@
         - axel
         - nmap
         - tshark
+        - build-essential
+        - git
+        - bgpq4
     become: yes
   - name: configure global bgp as AS399306
     include_role:
       name: mrlesmithjr.frr
     vars:
+      frr_version: 7.5.1
+      frr_logging: file /var/log/frr-log info
       frr_ip_forwarding: true
       frr_ipv6_forwarding: true
       frr_daemons:
@@ -36,25 +60,44 @@
           10 permit:
             prefix: 172.16.0.0/16
             match: le 32
-          Announcev4:
-            10 deny:
-              prefix: any
+        DefaultOnlyV4:
+          10 permit:
+            prefix: 0.0.0.0/0
+          20 deny:
+            prefix: any
+        MetallbV4:
+          10 permit:
+            prefix: any
+        AnnounceV4:
+          10 permit:
+            prefix: 23.177.16.0/24
+          20 permit:
+            prefix: 209.209.73.0/24
+          30 deny:
+            prefix: any
+        AcceptMostV4:
+          10 deny:
+            prefix: "0.0.0.0/0"
+          20 permit:
+            prefix: any
       frr_prefix_list_v6:
         Bad_IPs:
           05 permit:
             prefix: 1234:5678::/32
             match: ge 128
-        Announcev6:
+        AcceptMostV6:
+          10 deny:
+            prefix: "::/0"
+          20 permit:
+            prefix: any
+        AnnounceV6:
           05 permit:
             prefix: 2602:FCB1::/36
           10 deny:
             prefix: any
-# TODO: IPv6?
-#      frr_route_map:
-#        set-nexthop-he:
-#          permit 10:
-#            prefix: any
-#        set-nexthop-
+        DefaultOnlyV6:
+          40 deny:
+            prefix: any
       frr_bgp:
         asns:
           399306:
@@ -64,6 +107,37 @@
               - "bgp bestpath as-path multipath-relax"
               - "no bgp network import-check"
             neighbors:
+              metallb:
+                asn: internal
+                description: "metallb internal"
+                default_originate: true
+                is_peer_group: true
+                next_hop_self: true
+                password: "{{metallb_bgp_pw}}"
+                af_v4:
+                  - "activate"
+                af_v6:
+                  - "activate"
+                  - "prefix-list DefaultOnlyV6 out"
+                  - "default-originate"
+                other:
+                  - "prefix-list DefaultOnlyV4 out"
+                  - "weight 10000"
+                  - "soft-reconfiguration inbound"
+                  - "default-originate"
+              206.80.238.15:
+                asn: 26073
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
+              "2001:504:91::15":
+                asn: 26073
+                other:
+                  - "prefix-list AnnounceV4 out"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
               he:
                 asn: 6939
                 is_peer_group: true
@@ -73,84 +147,160 @@
               hev6:
                 asn: 6939
                 is_peer_group: true
+              hev6-over-fcix:
+                asn: 6939
+                is_peer_group: true
               fcixv6:
                 asn: 33495
                 is_peer_group: true
+              172.18.0.13:
+                asn: 6939
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMost in"                
               206.80.238.10:
                 asn: 43126
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMost in"
               "2001:504:91::10":
                 asn: 43126
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
                 af_v6:
                   - "activate"
-                  - "prefix-list Announcev6 out"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
               206.80.238.253:
                 asn: 33495
-                next_hop_self: true
-                peer_group: fcix
+#                peer_group: fcix
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+              206.80.238.2:
+                asn: 7034
+                description: "phirephly"
+                next_hop_self: true
+                other:
+                  - "prefix-list AnnounceV4 out"
+              206.80.238.122:
+                asn: 54364
+                description: "ido"
+                other:
+                  - "prefix-list AnnounceV4 out"
               206.80.238.254:
+                description: "fcixv4"
                 asn: 33495
-                next_hop_self: true
-                peer_group: fcix
+#                peer_group: fcix
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
               "2001:504:91::253":
                 asn: 33495
-                peer_group: fcixv6
-                description: "fcix"
+#                peer_group: fcixv6
+                description: "fcixv6"
                 next_hop_self: true
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
                 af_v6:
                   - "activate"
-                  - "prefix-list Announcev6 out"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
+              "2001:504:91::2":
+                asn: 7034
+                description: "PhirePhly"
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
+              "2001:504:91::122":
+                asn: 54364
+                description: "ido"
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
               "2001:504:91::254":
                 asn: 33495
-                peer_group: fcixv6
-                description: "fcix"
-                next_hop_self: true
+                description: "fcixv6"
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
                 af_v6:
                   - "activate"
-                  - "prefix-list Announcev6 out"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
+              "206.80.238.9":
+                asn: 6939
+                description: "he.net (v4) over fcix"
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "weight 1000"
+                  - "prefix-list AcceptMostV4 in"
+              "2001:504:91::9":
+                description: "he.net (v6) over fcix"
+                asn: 6939
+#                peer_group: hev6-over-fcix
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "weight 1000"
+                  - "prefix-list AcceptMostV4 in"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
               "fd00:2001:470:2::1":
                 asn: 6939
                 description: "he.net"
-                peer_group: hev6
+#                peer_group: hev6
                 other:
-                  - "prefix-list Announce out"
+                  - "prefix-list AnnounceV4 out"
+                  - "weight 1"
+                  - "prefix-list AcceptMostV4 in"
                 af_v6:
                   - "activate"
-                  - "prefix-list Announcev6 out"
-#            listen_range:
-#              172.18.0.12/30: he
-#              fd00:2001:470:2::2: hev6
-#              fe80::3eec:efff:fe44:b791/64: fcixv6
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
+            listen_range:
+              172.18.0.12/30: he
+              "64.71.157.129/27": metallb
+              "23.177.16.1/24": metallb
+              "209.209.73.1/24": metallb
+              "fd00:2001:470:2::2/64": hev6
+              "2001:504:91::127/64": hev6-over-fcix
+            networks:
+              - 64.71.157.128/27
+              - 209.209.73.0/24
+              - 23.177.16.0/24
             networks_v6:
               - 2602:FCB1::/36
             redistribute:
 #              - bgp
               - connected
-              - kernel
-              - ospf
               - static
             redistribute_v6:
 #              - bgp
               - connected
-              - kernel
+              - static
       frr_static:
-        0/0: 172.18.0.13
+#        "0.0.0.0/0": 172.18.0.13
+        "23.177.16.0/24": eno7
+        "209.209.73.0/24": eno7
+        "64.71.157.128/27": eno7
+        "172.18.0.12/30": eno6
       frr_static_v6:
-        "::/0": fd00:2001:470:2::1
+        "::/0": "fd00:2001:470:2::1"
         "2602:FCB1::/36": eno7
+#        "2602:FCB1::1337:1/64": eno7
       frr_interfaces:
 # Top RJ45 copper next to the SFP port, linked to HE
+# Commented out to keep this from overriding the static netplan route
         eno6:
           ip:
             - 172.18.0.12/30
@@ -158,15 +308,21 @@
             - fd00:2001:470:2::2/126
           other:
             - "no ipv6 nd suppress-ra"
+# Note: the SFP network card currently installed seems to flap occasionally so disable link detection.
 # SFP port to local switch
         eno7:
           ip:
             - 64.71.157.128/27
+            - 23.177.16.1/24
+            - 209.209.73.1/24
           ipv6:
             - 2001:470:1:993::1/64
             - 2602:FCB1::1/36
+            - 2602:FCB1::1337:1/64
           other:
             - "no ipv6 nd suppress-ra"
+# Occasionally this flaps for unknown reasons
+            - "no link-detect"
 # SFP port to FCIX
         eno8:
           ip:
@@ -175,3 +331,25 @@
             - 2001:504:91::127/64
           other:
             - "no ipv6 nd suppress-ra"
+# Occasionally this flaps for unknown reasons
+            - "no link-detect"
+# Make sure static routes are configured
+  - name: Add static route
+    ansible.builtin.lineinfile:
+      path: /etc/frr/daemons
+      line: staticd=yes
+    become: yes
+  - name: Configure zebra
+    ansible.builtin.lineinfile:
+      path: /etc/frr/daemons
+      line: zebra_options="  -A 127.0.0.1 --retain --nl-bufsize 9000000012 --v6-rr-semantics"
+    become: yes
+#  - name: Disable zebra nexthop (seeing crashes)
+#    ansible.builtin.lineinfile:
+#      path: /etc/frr/frr.conf
+#      line: no zebra nexthop kernel enable
+#    become: yes
+  - name: Reload the config
+    ansible.builtin.shell: /etc/init.d/frr reload
+    become: yes
+

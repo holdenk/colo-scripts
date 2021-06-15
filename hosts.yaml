@@ -3,36 +3,68 @@ all:
     router:
       hosts:
         ohana
+    rpki:
     dns:
-      hosts:
-        majesty
+      children:
+        dns-leader:
+          hosts:
+            jumba
+        dns-follower:
+          hosts:
+            majesty
     database:
+      children:
+        db-leader:
+          hosts:
+            nani:
+              server_id: 1
+              data_dir: "/db/"
+              bind_address: 0.0.0.0
+              repmgr_priority: 300
+        db-followers:
+          hosts:
+            david:
+              server_id: 2
+              data_dir: "/db/"
+              bind_address: 127.0.0.1
+              repmgr_priority: 200
+            jumba:
+              server_id: 3
+              data_dir: "/primary/db"
+              bind_address: 127.0.0.1
+              repmgr_priority: 300
+    storage:
       hosts:
-        nani
+        jumba
     kubernetes:
       children:
-        leader:
+        kube-leader:
           hosts:
-            k8s-leader:
-              ansible_user: root
+            nano-4gb
         leader-backup:
           hosts:
-#            k8s-worker-jetson:
         workers:
           children:
             pis:
               hosts:
+                k8s-leader:
+                  ansible_user: root
                 k8s-worker-100:
                   ansible_user: root
                 k8s-worker-102:
                   ansible_user: root
-            gpus:
-              hosts:
-                k8s-worker-nv1:
-                k8s-worker-nv2:
-                k8s-worker-nv3:
-            x86:
-              hosts:
-                experiment626:
-                experiment624:
+            docker-hosts:
+              children:
+                gpus:
+                  hosts:
+#                    k8s-worker-nv1:
+#                    k8s-worker-nv2:
+#                    k8s-worker-nv3:
+                x86:
+                  hosts:
+                    experiment626:
+                    experiment624:
+                    bubbles:
+                    experiment221:
+                    experiment625:
 localhost:

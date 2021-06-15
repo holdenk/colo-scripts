@@ -1,0 +1,70 @@
+---
+# Cleanup old install if desired
+- hosts: kubernetes
+  tasks:
+  - name: Remove apt src
+    file:
+      path: "/etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list"
+      state: absent
+    become: true
+  - name: Remove k3s install
+    ansible.builtin.shell: "k3s-uninstall.sh || k3s-agent-uninstall.sh || echo k"
+    become: true
+  - name: Remove kubernetes stuff
+    file:
+      path: "/etc/kubernetes"
+      state: absent
+    become: true
+  - name: Remove root kube config
+    file:
+      path: "/root/.kube"
+      state: absent
+    become: true
+  - name: Remove root kubeconfig
+    file:
+      path: "/root/kubeconfig"
+      state: absent
+    become: true
+  - name: Remove rancher
+    file:
+      path: "/etc/rancher"
+      state: absent
+    become: true
+  - name: Remove k3sup
+    file:
+      path: "/usr/local/bin/k3sup"
+      state: absent
+    become: true
+  - name: Remove kubelet
+    file:
+      path: "/var/kubelet"
+      state: absent
+    become: true
+  - name: Remove rancher var
+    file:
+      path: "/var/rancher"
+      state: absent
+    become: true
+  - name: Remove ceph
+    ansible.builtin.shell: "rm -rf /var/lib/ceph; rm -rf /var/lib/rook"
+    become: true
+  - name: Zap
+    ansible.builtin.shell: "/zap || echo \"nozap\""
+    become: true
+  - name: Cleanup promisc
+    ansible.builtin.shell: "rm -f /etc/init.d/make-promisc /etc/rc5.d/S99make-promisc"
+    become: true
+  - name: Remove docker, containerd and friends
+    apt:
+      pkg:
+        - docker
+        - docker-engine
+        - docker.io
+        - runc
+        - containerd
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+      state: absent
+      purge: yes
+    become: yes

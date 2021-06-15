@@ -1,14 +1,26 @@
 ---
 - hosts: localhost
   tasks:
+  - name: Create a minio ns
+    community.kubernetes.k8s:
+      name: minio
+      api_version: v1
+      kind: Namespace
+      state: present
   - name: Create a metallb-system namespace
     community.kubernetes.k8s:
-      name: mettallb-system
+      name: metallb-system
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create a jhub namespace
+    community.kubernetes.k8s:
+      name: jhub
       api_version: v1
       kind: Namespace
       state: present
   - name: Install metallb
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml; kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/metallb.yaml"
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml; sleep 1; kubectl apply -f /home/holden/repos/colo-scripts/metallb.yaml; sleep 1"
   - name: Create metallb secret
     community.kubernetes.k8s:
       definition:
@@ -25,16 +37,42 @@
           secretkey: "{{metallb_key}}"
       state: present
   - name: Configure metallb
-    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/colo-scripts/metallb-config.yaml"
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          namespace: metallb-system
+          name: config
+        data:
+          config: |          
+            peers:
+              - peer-address: 64.71.157.129
+                peer-asn: 399306
+                my-asn: 399306
+                password: "{{metallb_bgp_pw}}"
+                node-selectors:
+                - match-labels:
+                    svccontroller.k3s.cattle.io/enablelb: true
+            address-pools:
+            - name: default
+              protocol: bgp
+              addresses:
+              - 23.177.16.200/26
+      state: present
   - name: Install helm
     ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
     args:
       creates: /usr/local/bin/helm
     become: true
-  - name: Add MinIO chart
+  - name: Add MinIO operator chart
+    community.kubernetes.helm_repository:
+      name: minio-operator
+      repo_url: "https://operator.min.io/"
+  - name: Add legacy MinIO chart
     community.kubernetes.helm_repository:
       name: minio
-      repo_url: "https://operator.min.io/"
+      repo_url: "https://helm.min.io/"
   - name: Add Traefik chart
     community.kubernetes.helm_repository:
       name: traefik
@@ -54,6 +92,10 @@
       release_namespace: cert-manager
       chart_version: v1.2.0
       create_namespace: true
+      values:
+        installCRDs: true
+  - name: Configure cert manager issuer
+    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/scalingpythonml/certificate-stuff/letsencrypt-issuer-production.yaml"
   - name: Deploy trafeik
     community.kubernetes.helm:
       name: traefik
@@ -61,14 +103,35 @@
       release_namespace: traefik-system
       create_namespace: true
       values:
-        deployment:
-           kind: Daemonset
+# To configure how we want things to go
+#        additionalArguments:
+#          - "--log.level=DEBUG"
+#          - "--providers.kubernetesIngress.ingressClass=traefik-cert-manager"
+#          - "--global.checknewversion"
+#          - "--global.sendanonymoususage"
+#          - "--entryPoints.traefik.address=:9000"
+#          - "--entryPoints.web.address=:8000"
+#          - "--entryPoints.websecure.address=:8443"
+#          - "--api.dashboard=true"
+#          - "--ping=true"
+# If we were to try and avoid cert-manager but it's being weird.
+#          - "--certificatesresolvers.le.acme.storage=/data/acme.json"
+#          - "--certificatesresolvers.le.acme.tlschallenge=true"
+#          - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
+#          - "--certificatesresolvers.le.acme.httpchallenge=true"
+#          - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
+#        persistence:
+#          enable: true
+#          storageClass: rook-cephfs
+#          accessMode: ReadWriteMany
+#          size: 128m
+#          path: "/data"
         ingressClass:
           enabled: true
           isDefaultClass: true
         service:
           spec:
-            loadBalancerIP: 64.71.157.158
+            loadBalancerIP: 23.177.16.200
   - name: Deploy rook ceph
     community.kubernetes.helm:
       name: rook-ceph
@@ -77,53 +140,316 @@
       create_namespace: true
   - name: Configure ceph cluster
     ansible.builtin.shell: "(kubectl get cephcluster.ceph.rook.io/rook-ceph -n rook-ceph || kubectl apply -n rook-ceph -f /home/holden/repos/colo-scripts/rook-ceph-cluster.yaml)"
-  - name: Deploy minio operator
+  - name: Configure ceph provisioner
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/rbd/storageclass-ec.yaml; kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/filesystem.yaml --validate=false; kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml"
+  - name: Deploy minio (non operator)
     community.kubernetes.helm:
-      name: minio-operator
-      chart_ref: minio/minio-operator
-      release_namespace: minio-operator
-      # See https://github.com/minio/operator/blob/bcf42334589cf04005348d9c448e072d254b4874/helm/minio-operator/values.yaml
+      name: minio
+      chart_ref: minio/minio
+      release_namespace: minio
       values:
-        tenants:
-          - name: minio1
-            image:
-              repository: minio/minio
-              tag: RELEASE.2021-03-01T04-20-55Z
-              pullPolicy: IfNotPresent
-            secrets:
-              name: minio1-secret
-              accessKey: "{{minio_accesskey}}"
-              secretKey: "{{minio_secretkey}}"
-            scheduler: {}
-            certificate:
-              externalCertSecret: {}
-              requestAutoCert: true
-              certConfig: {}
-            podManagementPolicy: Parallel
-            env: {}
-            serviceMetadata: {}
-            priorityClassName : ""
-            console:
-              image:
-                repository: minio/console
-                tag: v0.6.3
-                pullPolicy: IfNotPresent
-              replicaCount: 1
-              secrets:
-                name: console-secret
-                passphrase: "{{minio_secretkey}}"
-                salt: ThisIsAVeryLongPasswordForExample
-                accessKey: "{{minio_accesskey}}"
-                secretKey: "{{minio_secretkey}}"
-            s3:
-              bucketDNS: false
-            pools:
-              - servers: 5
-                volumesPerServer: 2
-                size: 10Gi
-                storageClassName: local-path
-            mountPath: /export
-            subPath: /data
-            metrics:
-              enable: true
-      create_namespace: true
+        accessKey: "{{minio_accesskey}}"
+        secretKey: "{{minio_secretkey}}"
+#  - name: Deploy minio operator (this doesn't work so great)
+#    community.kubernetes.helm:
+#      name: minio-operator
+#      chart_ref: minio/minio-operator
+#      release_namespace: minio-operator
+#      # See https://github.com/minio/operator/blob/bcf42334589cf04005348d9c448e072d254b4874/helm/minio-operator/values.yaml
+#      values:
+#        tenants:
+#          - name: minio
+#            image:
+#              repository: minio/minio
+#              tag: latest
+#              pullPolicy: IfNotPresent
+#            secrets:
+#              name: minio-admin-secret
+#              accessKey: "{{minio_accesskey}}"
+#              secretKey: "{{minio_secretkey}}"
+#            scheduler: {}
+#            certificate:
+#              externalCertSecret: {}
+#              requestAutoCert: false
+#              certConfig: {}
+ #           podManagementPolicy: Parallel
+ #           env: {}
+ #           serviceMetadata: {}
+ #           priorityClassName : ""
+#            console:
+#              image:
+#                repository: minio/console
+#                tag: latest
+#                pullPolicy: IfNotPresent
+#                replicaCount: 1
+#              secrets:
+#                name: console-secret
+#                passphrase: "{{minio_secretkey}}"
+#                salt: "{{minio_console_salt}}"
+#                accessKey: "{{minio_console_accesskey}}"
+#                secretKey: "{{minio_console_secretkey}}"
+#            s3:
+#              bucketDNS: false
+#            pools:
+#              - servers: 5
+#                volumesPerServer: 2
+#                size: 10Gi
+#                storageClass: local-path
+#                storageClassName: local-path
+#            mountPath: /export
+#            subPath: /data
+#            metrics:
+#              enable: true
+#      create_namespace: true
+#  - name: setup minio operator
+#    ansible.builtin.shell: "kubectl krew update && kubectl krew install minio && kubectl minio init"
+#  - name: create minio tenant
+#    ansible.builtin.shell: "kubectl  minio tenant create minio --servers 5 --volumes 5 --capacity 50Gi --namespace minio --storage-class local-storage "
+  - name: Create minio secret for Jupyter
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+
+        metadata:
+          name: minio
+          namespace: jhub
+
+        type: Opaque
+
+        stringData:
+          accessKey: "{{minio_accesskey}}"
+          secretKey: "{{minio_secretkey}}"
+      state: present
+  - name: Create a namespace for Spark
+    community.kubernetes.k8s:
+      name: spark
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create a SA for Spark
+    community.kubernetes.k8s:
+      name: spark
+      namespace: spark
+      api_version: v1
+      kind: serviceaccount
+      state: present
+  - name: Create a SA for Spark
+    community.kubernetes.k8s:
+      name: spark-rb
+      namespace: spark
+      definition:
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: edit
+        subjects:
+        - kind: ServiceAccount
+          name: spark
+          namespace: spark
+      api_version: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      state: present
+  - name: Create a greenIOT ns
+    community.kubernetes.k8s:
+      name: greeniot
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create greenIOT DB secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: ConfigMap
+
+        metadata:
+          name: dbconfig
+          namespace: greeniot
+        data:
+          config: |
+            [client]
+            port=3306
+            user=opengreeniot
+            password={{opengreeniot_db_pw}}
+            host=nani.pigscanfly.ca
+            database=opengreeniot
+      state: present
+  - name: Create greenIOT web secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+
+        metadata:
+          name: websecrets
+          namespace: greeniot
+
+        type: Opaque
+
+        stringData:
+          SECRET_KEY: "{{django_secret_key}}"
+          DEFAULT_FROM_EMAIL: "{{django_email_from_user}}"
+          EMAIL_HOST: "{{django_email_host}}"
+          EMAIL_HOST_USER: "{{django_email_host_user}}"
+          EMAIL_HOST_PASSWORD: "{{django_email_host_password}}"
+          STRIPE_SECRET_KEY: "{{django_stripe_secret_key}}"
+          STRIPE_PUBLISHABLE_KEY: "{{django_stripe_publishable_key}}"
+          STRIPE_PLAN_MONTHLY_ID: "{{django_stripe_plan_monthly_id}}"
+          STRIPE_PLAN_ANNUAL_ID: "{{django_stripe_plan_annual_id}}"
+          STRIPE_WEBHOOK_SIGNING_KEY: "{{django_stripe_webhook_signing_key}}"
+      state: present
+  - name: Create greenIOT web deployment backend
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: apps/v1
+        kind: Deployment
+        metadata:
+          name: web-backend
+          namespace: greeniot
+        spec:
+          selector:
+            matchLabels:
+              run: web-backend
+          replicas: 2
+          template:
+            metadata:
+              labels:
+                app: web-backend
+                run: web-backend
+            spec:
+              volumes:
+                - name: sql-config
+                  configMap:
+                    name: dbconfig
+              containers:
+              - name: server
+                image: holdenk/green-iot-web:latest
+                pullPolicy: Always
+                env:
+                  - name: SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: SECRET_KEY
+                  - name: DEFAULT_FROM_EMAIL
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: DEFAULT_FROM_EMAIL
+                  - name: EMAIL_HOST
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: EMAIL_HOST
+                  - name: EMAIL_HOST_USER
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: EMAIL_HOST_USER
+                  - name: EMAIL_HOST_PASSWORD
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: EMAIL_HOST_PASSWORD
+                  - name: STRIPE_SECRET_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: STRIPE_SECRET_KEY
+                  - name: STRIPE_PUBLISHABLE_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: STRIPE_PUBLISHABLE_KEY
+                  - name: STRIPE_PLAN_MONTHLY_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: STRIPE_PLAN_MONTHLY_ID
+                  - name: STRIPE_PLAN_ANNUAL_ID
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: STRIPE_PLAN_ANNUAL_ID
+                  - name: STRIPE_WEBHOOK_SIGNING_KEY
+                    valueFrom:
+                      secretKeyRef:
+                        name: websecrets
+                        key: STRIPE_WEBHOOK_SIGNING_KEY
+                ports:
+                - containerPort: 80
+                resources:
+                  limits:
+                    cpu: 5
+                    memory: 10G
+                  requests:
+                    cpu: 1
+                    memory: 1G
+                volumeMounts:
+                  - mountPath: "/opt/app/my.cnf"
+                    name: sql-config
+                    readOnly: true
+                    subPath: config
+      state: present
+  - name: Create greenIOT LB service
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Service
+        metadata:  
+          name: iot-web-service
+          namespace: greeniot
+        spec:
+          selector:    
+            app: web-backend
+          type: ClusterIP
+          ports:
+          - name: http
+            port: 80
+            targetPort: 80
+            protocol: TCP
+  - name: Create greenIOT certificate
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: greeniot-tls
+          namespace: greeniot
+        spec:
+          commonName: www.opengreeniot.com
+          secretName: greeniot-tls
+          dnsNames:
+            - www.opengreeniot.com
+            - opengreeniot.com
+          issuerRef:
+            name: letsencrypt-prod
+            kind: ClusterIssuer
+      state: present
+  - name: Create greenIOT Ingress
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: iot-web-ingress
+          namespace: greeniot
+          cert-manager.io/cluster-issuer: letsencrypt-prod
+        spec:
+          tls:
+            - secretName: greeniot-tls
+              hosts:
+              - www.opengreeniot.com
+              - opengreeniot.com
+          rules:
+          - host: "*.opengreeniot.com"
+            http:
+              paths:
+              - path: "/"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: iot-web-service
+                    port:
+                      number: 80
+      state: present

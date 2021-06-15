@@ -1,62 +1,88 @@
 ---
 - hosts: kubernetes
   tasks:
-  - name: Get everyones public key
-    ansible.builtin.slurp:
-      src: /root/.ssh/id_rsa.pub
-    register: remotekeys
-    become: true
-  - name: Configure reflexive root SSH access for k3sup
-    authorized_key:
-      user: root
-      state: present
-      key: "{{ remotekeys['content'] | b64decode }}"
-    become: true
-  - name: Install some debugging tools
+  - name: Update all packages to their latest version
+    apt:
+      name: "*"
+      state: latest
+      update_cache: yes
+    become: yes
+  - name: Install some base libraries we need
     apt:
       pkg:
-        - traceroute
-        - emacs
-        - telnet
-        - htop
-      state: latest
-      update_cache: true
-    become: true
+        - curl
+        - apt-transport-https
+        - ca-certificates
+        - gnupg
+        - lsb-release
+    become: yes
+  - name: Add an Apt signing key for 2ndquadrant
+    ansible.builtin.apt_key:
+      url: https://download.docker.com/linux/ubuntu/gpg
+      state: present
+    become: yes
+  - name: Add docker repo
+    ansible.builtin.apt_repository:
+      repo: "deb https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
+    become: yes
+  - name: Install containerd.io
+    apt:
+      pkg:
+        - containerd.io
+    become: yes
   - name: Install k3sup
-    ansible.builtin.shell: "(curl -sLS https://get.k3sup.dev | sh) && (install k3sup /usr/local/bin/)"
+    ansible.builtin.shell: "curl -sLS https://get.k3sup.dev | sh"
     args:
       creates: /usr/local/bin/k3sup
     become: true
-- hosts: k8s-leader
+- hosts: kube-leader
   tasks:
+  - name: Install docker
+    apt:
+      pkg:
+        - containerd.io
+        - docker-ce
+        - docker-ce-cli
+    become: yes
   - name: Install k3s leader
-    ansible.builtin.shell: "k3sup install --cluster --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--node-label node.kubernetes.io/storage=storage --disable servicelb --kube-proxy-arg ipvs-strict-arp --kube-proxy-arg proxy-mode=ipvs --disable traefik'"        
+    ansible.builtin.shell: "k3sup install --k3s-version v1.21.0+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
-- hosts: leader-backup
-  tasks:
-  - name: Install k3s fail over w/storage
-    ansible.builtin.shell: "k3sup join --cluster --host $(hostname).pigscanfly.ca --context k3s --server-ip {{ hostvars['k8s-leader']['ansible_eth0']['ipv4']['address']  }} --server --k3s-extra-args '--node-label node.kubernetes.io/storage=storage  --disable servicelb --kube-proxy-arg ipvs-strict-arp --kube-proxy-arg proxy-mode=ipvs --disable traefik'"
-    args:
-      creates: /etc/systemd/system/k3s.service
+    become: true
+#- hosts: leader-backup
+#  tasks:
+#  - name: Install k3s failover
+#    ansible.builtin.shell: "k3sup join --server --host $(hostname).pigscanfly.ca --server-ip {{ hostvars['k8s-leader']['ansible_eth0']['ipv4']['address']  }} --server --k3s-extra-args '--node-label node.kubernetes.io/storage=storage  --disable servicelb --disable traefik'"
+#    args:
+#      creates: /etc/systemd/system/k3s.service
+#    become: true
 - hosts: pis
   tasks:
   - name: Install k3s workers with containerd & storage role
-    ansible.builtin.shell: "k3sup join --server-ip {{ hostvars['k8s-leader']['ansible_eth0']['ipv4']['address']  }} --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage --node-label svccontroller.k3s.cattle.io/enablelb=true'"
+    ansible.builtin.shell: "k3sup join --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
+- hosts: docker-hosts
+  tasks:
+  - name: Install docker
+    apt:
+      pkg:
+        - docker-ce
+        - docker-ce-cli
+        - containerd.io
+    become: yes
 - hosts: gpus
   tasks:
   - name: Install k3s workers with docker
-    ansible.builtin.shell: "k3sup join --server-ip {{ hostvars['k8s-leader']['ansible_eth0']['ipv4']['address']  }} --host $(hostname).pigscanfly.ca --k3s-extra-args '--docker --node-label node.kubernetes.io/gpu=gpu'"
+    ansible.builtin.shell: "k3sup join --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--docker --node-label node.kubernetes.io/gpu=gpu'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
 - hosts: x86
   tasks:
   - name: Install k3s workers with docker
-    ansible.builtin.shell: "k3sup join --server-ip {{ hostvars['k8s-leader']['ansible_eth0']['ipv4']['address']  }} --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
+    ansible.builtin.shell: "k3sup join --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
