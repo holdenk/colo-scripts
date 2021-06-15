@@ -1,0 +1,27 @@
+---
+- hosts: all
+  tasks:
+  - name: Write dns configuration
+    copy:
+      dest: "/etc/systemd/resolved.conf"
+      content: |
+        [Resolve]
+        DNS=8.8.8.8
+        FallbackDNS=4.4.4.4
+        Domains=pigscanfly.ca
+    become: true
+  - name: Re-run the DNS configuration
+    ansible.builtin.shell: "host google.com || systemctl restart systemd-resolved"
+    become: true
+  - name: Install some debugging tools
+    apt:
+      pkg:
+        - net-tools
+        - traceroute
+        - emacs
+        - telnet
+        - htop
+        - iputils-arping
+      state: latest
+      update_cache: true
+    become: true

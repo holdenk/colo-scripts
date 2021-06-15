@@ -1,0 +1,14 @@
+$TTL 86400
+@ IN SOA pigscanfly.ca. holden.pigscanfly.ca. (
+4 ; serial
+28800 ; refresh
+14400 ; retry
+3600000 ; expire
+86400 ; default_ttl
+)
+@	IN	NS ns-global.kjsl.com.
+@	IN	NS majesty.pigscanfly.ca.
+@	IN    	NS jumba.pigscanfly.ca.
+1 	IN  	PTR ohana.pigscanfly.ca.
+10	IN	PTR majesty.pigscanfly.ca.
+*	IN	PTR unallocated.pigscanfly.ca.

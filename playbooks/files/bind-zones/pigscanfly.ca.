@@ -1,0 +1,48 @@
+;Configuration for DNS Zone pigscanfly.ca
+
+;-----;pigscanfly.ca;
+pigscanfly.ca. 300 IN SOA ns.rackspace.com. holden.karau.gmail.com. (
+1618712321
+21600
+3600
+1814400
+300
+)
+experiment626.pigscanfly.ca. 300 IN AAAA 2602:FCB1::1337:10
+experiment624.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:11
+nani.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:12
+k8s-leader.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:13
+bubbles.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:14
+k8s-worker-100.pigscanfly.ca. 300 IN AAAA 2602:FCB1::1337:15
+k8s-worker-102.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:16
+jumba.pigscanfly.ca. 300 IN AAAA 2602:fcb1::1337:17
+pigscanfly.ca. 300 IN AAAA 2605:2700:0:3:a800:ff:fef5:4975
+pigscanfly.ca. 300 IN A 71.19.157.174
+domains.pigscanfly.ca. 300 IN A 209.99.17.23
+controlpannel.pigscanfly.ca. 300 IN A 209.99.17.12
+mentionbot.pigscanfly.ca. 300 IN A 35.188.23.211
+iot1.pigscanfly.ca. 300 IN A 45.32.67.52
+k8sleader.pigscanfly.ca. 300 IN A 64.71.157.138
+k8s-worker-100.pigscanfly.ca. 300 IN A 23.177.16.15
+k8s-worker-102.pigscanfly.ca. 300 IN A 23.177.16.16
+k8s-worker-jetson-nano.pigscanfly.ca. 300 IN A 64.71.157.145
+k8s-worker-nv3.pigscanfly.ca. 300 IN A 23.177.16.20
+k8s-worker-nv2.pigscanfly.ca. 300 IN A 23.177.16.18
+k8s-worker-nv1.pigscanfly.ca. 300 IN A 23.177.16.19
+k8s-leader.pigscanfly.ca. 300 IN A 23.177.16.13
+ohana.pigscanfly.ca. 300 IN A 64.71.157.129
+experiment626.pigscanfly.ca. 300 IN A 23.177.16.10
+nani.pigscanfly.ca. 300 IN A 23.177.16.12
+experiment624.pigscanfly.ca. 300 IN A 23.177.16.11
+traefik.pigscanfly.ca. 300 IN A 23.177.16.200
+majesty.pigscanfly.ca. 300 IN A 209.209.73.10
+bubbles.pigscanfly.ca. 300 IN A 23.177.16.14
+jumba.pigscanfly.ca. 300 IN A 23.177.16.17
+nano-4gb.pigscanfly.ca. 300 IN A 23.177.16.21
+pigscanfly.ca. 300 IN NS dns1.stabletransit.com.
+pigscanfly.ca. 300 IN NS dns2.stabletransit.com.
+pigscanfly.ca. 300 IN MX 200 pigscanfly.ca.
+*.pigscanfly.ca. 300 IN MX 200 pigscanfly.ca.
+pigscanfly.ca. 300 IN TXT "google-site-verification=yDZ5OkDOnJGiSGJZ8ixJhfOTS2bcVO4MyDRKTezdTbs"
+20160214._domainkey.pigscanfly.ca. 300 IN TXT "k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArOEY4ixCpm4yVzj5LjUt8XtgujG3AMUnh4QMQJ+Rw10bYJEfnL5pleHztn/DWWTgsPIR/qMd5y8U6BF1MlC64+debbVPUR3sm58IhlZNphXhamqpWnOKDY9AR9BZKTRu4MAZkL3LsMRon3L6cEy0DK/maBLS31PT0e5NK+CFo4lFeohsTVaVOg72kf0FYl0CYR+Blqq/MX" "BWXPiDh9+q6Y2xHnUQGiLdaaQBHe4Ur2jBf8eNlst14Wu4vCC6IviLay2p8w033Zn8yEJUW+M4qoYe7Daf0zQkfNf6ZE/hkykrDkGXQY828OK6fjWI/7RmRQCMaAVOAar6itUpTjbDGQIDAQAB"
+pigscanfly.ca. 300 IN TXT "v=spf1 include:_spf.google.com mx ip4:71.19.157.174 ~all"

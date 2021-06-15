@@ -1,0 +1,11 @@
+---
+- hosts: storage
+  tasks:
+  - name: Install ZFS server
+    apt:
+      pkg:
+        - zfsutils-linux
+      state: latest
+    become: yes
+
+    

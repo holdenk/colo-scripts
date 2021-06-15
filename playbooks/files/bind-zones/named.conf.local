@@ -1,0 +1,48 @@
+zone "16.177.23.in-addr.arpa" {
+	type master;
+	file "/etc/bind/16.177.23.in-addr.arpa";
+    allow-transfer {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+    also-notify {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+};
+zone "73.209.209.in-addr.arpa" {
+	type master;
+	file "/etc/bind/73.209.209.in-addr.arpa";
+    allow-transfer {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+    also-notify {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+};
+zone "0.1.b.c.f.2.0.6.2.ip6.arpa" {
+	type master;
+	file "/etc/bind/2602-fcb1.in-addr.arpa";
+    allow-transfer {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+    also-notify {
+        204.87.183.53;
+        2607:7c80:54:6::53;
+    };
+};
+zone "pigscanfly.ca." {
+	type master;
+	file "/etc/bind/pigscanfly.ca.";
+};
+zone "api.arrowconnect.io." {
+	type master;
+	file "/etc/bind/override.zone";
+};
+zone "mqtt-a01.arrowconnect.io." {
+	type master;
+	file "/etc/bind/override.zone";
+};

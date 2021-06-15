@@ -1,0 +1,145 @@
+---
+- hosts: database
+  become: yes
+  tasks:
+  - name: Add an Apt signing key for 2ndquadrant
+    ansible.builtin.apt_key:
+      url: https://dl.2ndquadrant.com/gpg-key.asc
+      state: present
+    become: yes
+#  - name: Add apt repo for 2ndquadrant
+#    ansible.builtin.apt_repository:
+#      repo: "deb [arch=amd64] https://dl.2ndquadrant.com/default/release/apt {{ ansible_distribution_release }}-2ndquadrant main"
+#    become: yes
+  - name: Add the mariadb mount directory to fstab
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      line: "{{data_dir}}/mariadb /var/lib/mysql none defaults,bind 0 0"
+  - name: Add the mariadb mount directory to fstab
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      line: "{{data_dir}}/postgresql /var/lib/postgresql none defaults,bind 0 0" 
+  - name: Create the db directories and bind mount it (see https://github.com/geerlingguy/ansible-role-mysql/issues/377)
+    ansible.builtin.shell: "mkdir -p {{data_dir}}/mariadb && mkdir {{data_dir}}/postgresql && mkdir -p /var/lib/mysql && mkdir -p /var/lib/postgresql && mount /var/lib/mysql && mount /var/lib/postgresql"
+    args:
+      creates: "{{data_dir}}/mariadb"
+  - name: Install MariaDB Postgresql and friends
+    apt:
+      pkg:
+#        - postgresql-12
+#        - postgresql-12-repmgr
+        - libpq-dev
+        - mariadb-client
+        - mariadb-server
+        - python3-mysqldb
+        - python3-pymysql
+        - python3-pip
+      state: latest
+      update_cache: true
+  - name: Install psycopg2 python package
+    pip:
+      name: psycopg2
+  - name: Write out the MySQL conf
+    copy:
+      dest: "/etc/mysql/mariadb.conf.d/50-server.cnf"
+      content: |
+        [server]
+        # this is only for the mysqld standalone daemon
+        [mysqld]
+        #
+        # * Basic Settings
+        #
+        user                    = mysql
+        pid-file                = /run/mysqld/mysqld.pid
+        socket                  = /run/mysqld/mysqld.sock
+        #port                   = 3306
+        basedir                 = /usr
+        datadir                 = /var/lib/mysql
+        tmpdir                  = /tmp
+        lc-messages-dir         = /usr/share/mysql
+        server-id               = {{server_id}}
+        bind-address            = {{bind_address}}
+        query_cache_size        = 32M
+        log_error = /var/log/mysql/error.log
+        log_bin                = /var/log/mysql/mysql-bin.log
+        expire_logs_days        = 30
+        max_binlog_size        = 500M
+        character-set-server  = utf8mb4
+        collation-server      = utf8mb4_general_ci
+
+  - name: Restart the server to pick up the bind address (note reload isn't enough)
+    ansible.builtin.shell: "netstat --tcp -l |grep '{{bind_address}}:mysql' || /etc/init.d/mysql restart"
+  - name: Reload the server regardless
+    ansible.builtin.shell: "/etc/init.d/mysql reload"
+- hosts: db-leader
+  become: yes
+  tasks:
+  - name: Create databases
+    community.mysql.mysql_db:
+      name:
+        - opengreeniot
+        - metastore
+      state: present
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+  - name: Removes all anonymous user accounts
+    community.mysql.mysql_user:
+      name: ''
+      host_all: yes
+      state: absent
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+  - name: Create opengreeniotuser
+    community.mysql.mysql_user:
+      state: present
+      name: opengreeniot
+      password: "{{opengreeniot_db_pw}}"
+      host: "%"
+      priv: "opengreeniot.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+  - name: Create iceberg user
+    community.mysql.mysql_user:
+      state: present
+      name: iceberg
+      password: "{{iceberg_db_pw}}"
+      host: "%"
+      priv: "metastore.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+  - name: Create holden user
+    community.mysql.mysql_user:
+      name: holden
+      host: "localhost"
+      password: "{{mysql_user_pw}}"
+      priv: "*.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create repl user
+    community.mysql.mysql_user:
+      name: magic-replication-user
+      host: "%"
+      password: "{{mysql_replication_pw}}"
+      priv: "*.*:REPLICATION SLAVE"
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+- hosts: db-followers
+  become: yes
+  tasks:
+  - name: Stop any existing replication
+    community.mysql.mysql_replication:
+      mode: stopreplica
+      fail_on_error: no
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      connection_name: master-1
+  - name: On MariaDB change master to use GTID current_pos
+    community.mysql.mysql_replication:
+      mode: changemaster
+      master_use_gtid: slave_pos
+      master_user: magic-replication-user
+      master_password: "{{mysql_replication_pw}}"
+      master_host: nani.pigscanfly.ca
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      connection_name: master-1
+# This _might_ fail in which case just re-run it
+  - name: Run start replica and fail the task on errors
+    community.mysql.mysql_replication:
+      mode: startreplica
+      connection_name: master-1
+      fail_on_error: yes
+      login_unix_socket: /var/run/mysqld/mysqld.sock 
+# TODO: set up postgres replication

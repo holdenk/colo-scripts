@@ -1,0 +1,12 @@
+$TTL 86400
+@ IN SOA pigscanfly.ca. holden.pigscanfly.ca. (
+11 ; serial
+28800 ; refresh
+14400 ; retry
+3600000 ; expire
+86400 ; default_ttl
+)
+@	IN	NS majesty.pigscanfly.ca.
+@	IN    	NS jumba.pigscanfly.ca.
+@	IN	CNAME traefik.pigscanfly.ca.
+*	IN	CNAME traefik.pigscanfly.ca.

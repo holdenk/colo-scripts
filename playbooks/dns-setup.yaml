@@ -1,0 +1,50 @@
+---
+- hosts: dns
+  tasks:
+  - name: Install DNS server
+    apt:
+      pkg:
+        - bind9
+        - bind9utils
+        - bind9-doc
+      state: latest
+      update_cache: true
+    become: true
+  - name: Enable forwarding inline content
+    ansible.builtin.copy:
+      content: '
+options {
+	directory "/var/cache/bind";
+
+        recursion yes;
+
+	 forwarders {
+	 	8.8.8.8;
+	 	8.8.4.4;
+	 	1.1.1.1;
+	 };
+
+	dnssec-validation auto;
+
+	listen-on-v6 { any; };
+        allow-query { any; };
+};
+'
+      dest: /etc/bind/named.conf.options
+    become: true
+  - name: Copy the zones & name config
+    ansible.builtin.copy:
+      src: bind-zones/
+      dest: /etc/bind/
+    become: true
+  - name: Checkout reverse zone tool
+    ansible.builtin.shell: "git clone https://github.com/oasys/mkrdns.git"
+    become: true
+    args:
+      creates: "mkrdns"
+  - name: Update the reverse zones
+    ansible.builtin.shell: "cd mkrdns; perl mkrdns"
+    become: true
+  - name: Create the db directory & bound mount it (see https://github.com/geerlingguy/ansible-role-mysql/issues/377)
+    ansible.builtin.shell: "/etc/init.d/named reload"
+    become: yes
