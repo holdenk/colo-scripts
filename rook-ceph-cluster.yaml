@@ -212,7 +212,7 @@ spec:
     nodes:
     - name: "k8s-leader"
       devices:
-      - name: "sda"
+      - name: "sdb"
     - name: "k8s-worker-100"
       devices:
       - name: "sda"
