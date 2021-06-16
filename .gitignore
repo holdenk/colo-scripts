@@ -130,3 +130,6 @@ dmypy.json
 
 # secret
 secret
+
+#ignore the public keys we pull down from the servers
+playbooks/buffer
