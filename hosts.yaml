@@ -57,9 +57,9 @@ all:
               children:
                 gpus:
                   hosts:
-#                    k8s-worker-nv1:
-#                    k8s-worker-nv2:
-#                    k8s-worker-nv3:
+                    k8s-worker-nv1:
+                    k8s-worker-nv2:
+                    k8s-worker-nv3:
                 x86:
                   hosts:
                     experiment626:
