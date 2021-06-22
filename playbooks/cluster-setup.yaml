@@ -45,7 +45,7 @@
           namespace: metallb-system
           name: config
         data:
-          config: |          
+          config: |
             peers:
               - peer-address: 64.71.157.129
                 peer-asn: 399306
@@ -90,7 +90,7 @@
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.2.0
+      chart_version: v1.4.0
       create_namespace: true
       values:
         installCRDs: true
@@ -396,11 +396,11 @@
       definition:
         apiVersion: v1
         kind: Service
-        metadata:  
+        metadata:
           name: iot-web-service
           namespace: greeniot
         spec:
-          selector:    
+          selector:
             app: web-backend
           type: ClusterIP
           ports:
