@@ -45,6 +45,11 @@
       path: "/var/rancher"
       state: absent
     become: true
+  - name: Remove /var/lib/rancher
+    file:
+      path: "/var/lib/rancher"
+      state: absent
+    become: true
   - name: Remove ceph
     file:
       path: "/var/lib/ceph"
@@ -55,25 +60,29 @@
       path: "/var/lib/rook"
       state: "absent"
     become: true
-  - name: Zap
-    ansible.builtin.shell: "/zap || echo \"nozap\""
-    become: true
+#  - name: Zap
+#    ansible.builtin.shell: "/zap || echo \"nozap\""
+#    become: true
   - name: Cleanup promisc
     file:
       path: "/etc/init.d/make-promisc"
       state: "absent"
     become: true
-  - name: Remove docker, containerd and friends
-    apt:
-      pkg:
-        - docker
-        - docker-engine
-        - docker.io
-        - runc
-        - containerd
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-      state: absent
-      purge: yes
+#  - name: Remove docker, containerd and friends
+#    apt:
+#      pkg:
+#        - docker
+#        - docker-engine
+#        - docker.io
+#        - runc
+#        - containerd
+#        - docker-ce
+#        - docker-ce-cli
+#        - containerd.io
+#      state: absent
+#      purge: yes
+#    become: yes
+  - name: Bounce everything (yaaaay)
+    reboot:
+      reboot_timeout: 600
     become: yes

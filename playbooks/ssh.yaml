@@ -55,3 +55,35 @@
     with_items: 
       - "{{ groups['kubernetes'] }}"
     become: yes
+  # Root password login (ugh) cloud.net req
+  - name: Set root pw
+    ansible.builtin.user:
+      name: root
+      password: "{{ root_pw | password_hash('sha512') }}"
+    become: yes
+  - name: Make sure group wheel is not in the sudoers configuration
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      state: absent
+      regexp: '^PermitRootLogin no'
+    become: yes
+  - name: Make sure group wheel is not in the sudoers configuration
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      state: absent
+      regexp: '^PasswordAuthentication no'
+    become: yes
+  - name: Change ssh config
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      line: "PasswordAuthentication yes"
+    become: yes
+  - name: Change ssh config
+    ansible.builtin.lineinfile:
+      path: /etc/ssh/sshd_config
+      line: "PermitRootLogin yes"
+    become: yes
+  - name: Restart ssh
+    ansible.builtin.shell: "systemctl restart sshd"
+    become: yes
+

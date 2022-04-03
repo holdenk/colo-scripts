@@ -290,14 +290,14 @@
               - static
       frr_static:
 #        "0.0.0.0/0": 172.18.0.13
-        "23.177.16.0/24": eno7
-        "209.209.73.0/24": eno7
-        "64.71.157.128/27": eno7
+        "23.177.16.0/24": enp6s0np1
+        "209.209.73.0/24": enp6s0np1
+        "64.71.157.128/27": enp6s0np1
         "172.18.0.12/30": eno6
       frr_static_v6:
         "::/0": "fd00:2001:470:2::1"
-        "2602:FCB1::/36": eno7
-#        "2602:FCB1::1337:1/64": eno7
+        "2602:FCB1::/36": enp6s0np1
+#        "2602:FCB1::1337:1/64": enp6s0np1
       frr_interfaces:
 # Top RJ45 copper next to the SFP port, linked to HE
 # Commented out to keep this from overriding the static netplan route
@@ -310,7 +310,7 @@
             - "no ipv6 nd suppress-ra"
 # Note: the SFP network card currently installed seems to flap occasionally so disable link detection.
 # SFP port to local switch
-        eno7:
+        enp6s0np1:
           ip:
             - 64.71.157.128/27
             - 23.177.16.1/24
@@ -324,7 +324,7 @@
 # Occasionally this flaps for unknown reasons
             - "no link-detect"
 # SFP port to FCIX
-        eno8:
+        enp6s0np0:
           ip:
             - 206.80.238.127/24
           ipv6:

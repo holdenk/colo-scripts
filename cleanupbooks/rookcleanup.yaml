@@ -1,0 +1,38 @@
+---
+# Cleanup old install if desired
+- hosts: localhost
+  tasks:
+  - name: Delete ceph cluster
+    ansible.builtin.shell: "kubectl delete -n rook-ceph -f /home/holden/repos/colo-scripts/rook-ceph-cluster.yaml"
+  - name: Delete ceph provisioner
+    ansible.builtin.shell: "kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/rbd/storageclass-ec.yaml; kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/filesystem.yaml --validate=false; kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml"
+  - name: Add Rook Ceph chart
+    community.kubernetes.helm_repository:
+      name: rook-release
+      repo_url: "https://charts.rook.io/release"
+  - name: Delete rook ceph ns
+    community.kubernetes.helm:
+      name: rook-ceph
+      chart_ref: rook-release/rook-ceph
+      release_namespace: rook-ceph
+      create_namespace: true
+      state: absent
+  - name: Delete rook ns
+    community.kubernetes.k8s:
+      name: rook-ceph
+      api_version: v1
+      kind: Namespace
+      state: absent
+- hosts: kubernetes
+  tasks:
+  - name: Zap
+    ansible.builtin.shell: "/zap || echo \"nozap\""
+    become: true
+  - name: Remove rook dir in host
+    file:
+      path: "/var/lib/rook"
+      state: "absent"
+    become: true
+  - name: Zap
+    ansible.builtin.shell: "/zap || echo \"nozap\""
+    become: true

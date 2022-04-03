@@ -26,8 +26,9 @@
   - name: Install MariaDB Postgresql and friends
     apt:
       pkg:
-#        - postgresql-12
-#        - postgresql-12-repmgr
+        - postgresql-12
+        - postgresql-12-repmgr
+        - postgresql-client-common
         - libpq-dev
         - mariadb-client
         - mariadb-server
@@ -74,11 +75,74 @@
 - hosts: db-leader
   become: yes
   tasks:
-  - name: Create databases
+#postgres
+  - name: Start database
+    systemd:
+      state: started
+      name: postgresql.service
+    become: yes
+  - name: Create replication user, set MD5-hashed password, grant privs
+    postgresql_user:
+      name: replusr
+      password: "{{ 'md5' + ((repl_passwd + repl_user) | hash('md5')) }}"
+      role_attr_flags: REPLICATION
+      priv: ALL
+      db: postgres
+    become_user: postgres
+  - name: Configure DBs to listen on ip address
+    postgresql_set:
+      name: listen_addresses
+      value: 'localhost,{{ ansible_ens3.ipv4.address }}'
+  - name: Configure wal_level parameter
+    postgresql_set:
+      name: wal_level
+      value: 'replica'
+  - name: Configure wal_log_hints parameter
+    postgresql_set:
+      name: wal_log_hints
+      value: 'on'
+  - name: Configure max_wal_senders parameter
+    postgresql_set:
+      name: max_wal_senders
+      value: '8'
+  - name: Configure wal_keep_segments parameter
+    postgresql_set:
+      name: wal_keep_segments
+      value: '8'
+  - name: Configure hot_standby parameter
+    postgresql_set:
+      name: hot_standby
+      value: 'on'
+  - name: Enable replication user to login
+    blockinfile:
+      path: /var/lib/pgsql/12/data/pg_hba.conf
+      block: |
+        {% for host in groups['db_hosts'] %}
+        host    replication     replusr     {{ hostvars[host]['ansible_facts']['ens3']['ipv4']['address'] }}/32    md5
+        {% endfor %}
+  - name: Restart database
+    systemd:
+      state: restarted
+      name: postgresql-12
+    become: yes
+    when: standby_status.stat.exists == False
+  - name: Create a new database with name spacebeaver
+    community.postgresql.postgresql_db:
+      name: spacebeaver
+  - name: Spacebeaver permissions
+    community.postgresql.postgresql_user:
+      db: spacebeaver
+      name: spacebeaver
+      password: "{{spacebeaver_db_pw}}"
+      priv: "ALL"
+#mysql
+  - name: Create mysql databases
     community.mysql.mysql_db:
       name:
         - opengreeniot
         - metastore
+        - spacebeaver
+        - spacebeaver_admin
       state: present
       login_unix_socket: /var/run/mysqld/mysqld.sock 
   - name: Removes all anonymous user accounts
@@ -94,6 +158,14 @@
       password: "{{opengreeniot_db_pw}}"
       host: "%"
       priv: "opengreeniot.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create opengreeniotuser
+    community.mysql.mysql_user:
+      state: present
+      name: spacebeaver
+      password: "{{spacebeaver_db_pw}}"
+      host: "%"
+      priv: "spacebeaver%.*:ALL"
       login_unix_socket: /var/run/mysqld/mysqld.sock 
   - name: Create iceberg user
     community.mysql.mysql_user:
@@ -143,3 +215,49 @@
       fail_on_error: yes
       login_unix_socket: /var/run/mysqld/mysqld.sock 
 # TODO: set up postgres replication
+#postgres
+  - name: pgpass for non interactive logins to the other node
+    blockinfile:
+      path: /var/lib/pgsql/.pgpass
+      create: yes
+      mode: 0600
+      block: |
+        # hostname:port:database:username:password
+        {% for host in groups['databases'] %}
+        {{ hostvars[host]['inventory_hostname'] + ':5432:replication:' + repl_user + ':' + repl_passwd}}
+        {% endfor %}
+  - name: Stop database
+    systemd:
+      state: stopped
+      name: postgresql-12
+    become: yes
+#    - name: Remove data
+#      file:
+#        state: absent
+#        path: "/var/lib/pgsql/12/data/"
+  - name: Check if database is already initialized
+    stat:
+      path: '/var/lib/pgsql/12/data/PG_VERSION'
+    register: init_status
+  - name: Initialize the slave database
+    shell: "pg_basebackup -D /var/lib/pgsql/12/data -h {{ master_host }} -X stream -c fast -U {{ repl_user }} -w -R"
+    when: init_status.stat.exists == False
+  - name: Start database
+    systemd:
+      state: started
+      name: postgresql-12
+    become: yes
+  - name: Wait for postgres to listen on port 5432
+    wait_for:
+      port: 5432
+      delay: 2
+  - name: Configure recovery_target_timeline parameter
+    postgresql_set:
+      name: recovery_target_timeline
+      value: 'latest'
+    notify: Restart database
+  - name: Configure DBs to listen on ip address
+    postgresql_set:
+      name: listen_addresses
+      value: 'localhost,{{ ansible_ens3.ipv4.address }}'
+    notify: Restart database

@@ -1,9 +1,31 @@
 ---
 - hosts: localhost
   tasks:
+  - name: Create a longhorn-system namespace
+    community.kubernetes.k8s:
+      name: longhorn-system
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create longhorn secret
+    ansible.builtin.shell: "(echo holden:$(openssl passwd -stdin -apr1 <<< {{longhorn_pw}}) >> auth); kubectl get secret -n longhorn-system basic-auth || kubectl -n longhorn-system create secret generic basic-auth --from-file=auth"
+    args:
+      executable: /bin/bash
   - name: Create a minio ns
     community.kubernetes.k8s:
       name: minio
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create a dask ns
+    community.kubernetes.k8s:
+      name: dask
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create a ray ns
+    community.kubernetes.k8s:
+      name: ray
       api_version: v1
       kind: Namespace
       state: present
@@ -16,6 +38,13 @@
   - name: Create a jhub namespace
     community.kubernetes.k8s:
       name: jhub
+      api_version: v1
+      kind: Namespace
+      state: present
+# Extra ns for mika
+  - name: Create a mika namespace
+    community.kubernetes.k8s:
+      name: mika
       api_version: v1
       kind: Namespace
       state: present
@@ -65,6 +94,10 @@
     args:
       creates: /usr/local/bin/helm
     become: true
+  - name: Add bitnami chart
+    community.kubernetes.helm_repository:
+      name: bitnami
+      repo_url: "https://charts.bitnami.com/bitnami"
   - name: Add MinIO operator chart
     community.kubernetes.helm_repository:
       name: minio-operator
@@ -81,6 +114,10 @@
     community.kubernetes.helm_repository:
       name: rook-release
       repo_url: "https://charts.rook.io/release"
+  - name: Add longhorn chart
+    community.kubernetes.helm_repository:
+      name: longhorn
+      repo_url: "https://charts.longhorn.io"
   - name: Add cert-manager chart
     community.kubernetes.helm_repository:
       name: jetstack
@@ -90,7 +127,7 @@
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.4.0
+      chart_version: v1.7.1
       create_namespace: true
       values:
         installCRDs: true
@@ -132,79 +169,29 @@
         service:
           spec:
             loadBalancerIP: 23.177.16.200
-  - name: Deploy rook ceph
+# longhorn gets sad in any NS other than longhorn-system :/
+  - name: Deploy longhorn
     community.kubernetes.helm:
-      name: rook-ceph
-      chart_ref: rook-release/rook-ceph
-      release_namespace: rook-ceph
+      name: longhorn
+      chart_ref: longhorn/longhorn
+      release_namespace: longhorn-system
       create_namespace: true
-  - name: Configure ceph cluster
-    ansible.builtin.shell: "(kubectl get cephcluster.ceph.rook.io/rook-ceph -n rook-ceph || kubectl apply -n rook-ceph -f /home/holden/repos/colo-scripts/rook-ceph-cluster.yaml)"
-  - name: Configure ceph provisioner
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/rbd/storageclass-ec.yaml; kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/filesystem.yaml --validate=false; kubectl apply -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml"
+      values:
+        defaultSettings:
+          defaultDataPath: /storage
+# See https://rpi4cluster.com/k3s/k3s-storage-setting/
   - name: Deploy minio (non operator)
     community.kubernetes.helm:
       name: minio
       chart_ref: minio/minio
       release_namespace: minio
       values:
-        accessKey: "{{minio_accesskey}}"
-        secretKey: "{{minio_secretkey}}"
-#  - name: Deploy minio operator (this doesn't work so great)
-#    community.kubernetes.helm:
-#      name: minio-operator
-#      chart_ref: minio/minio-operator
-#      release_namespace: minio-operator
-#      # See https://github.com/minio/operator/blob/bcf42334589cf04005348d9c448e072d254b4874/helm/minio-operator/values.yaml
-#      values:
-#        tenants:
-#          - name: minio
-#            image:
-#              repository: minio/minio
-#              tag: latest
-#              pullPolicy: IfNotPresent
-#            secrets:
-#              name: minio-admin-secret
-#              accessKey: "{{minio_accesskey}}"
-#              secretKey: "{{minio_secretkey}}"
-#            scheduler: {}
-#            certificate:
-#              externalCertSecret: {}
-#              requestAutoCert: false
-#              certConfig: {}
- #           podManagementPolicy: Parallel
- #           env: {}
- #           serviceMetadata: {}
- #           priorityClassName : ""
-#            console:
-#              image:
-#                repository: minio/console
-#                tag: latest
-#                pullPolicy: IfNotPresent
-#                replicaCount: 1
-#              secrets:
-#                name: console-secret
-#                passphrase: "{{minio_secretkey}}"
-#                salt: "{{minio_console_salt}}"
-#                accessKey: "{{minio_console_accesskey}}"
-#                secretKey: "{{minio_console_secretkey}}"
-#            s3:
-#              bucketDNS: false
-#            pools:
-#              - servers: 5
-#                volumesPerServer: 2
-#                size: 10Gi
-#                storageClass: local-path
-#                storageClassName: local-path
-#            mountPath: /export
-#            subPath: /data
-#            metrics:
-#              enable: true
-#      create_namespace: true
-#  - name: setup minio operator
-#    ansible.builtin.shell: "kubectl krew update && kubectl krew install minio && kubectl minio init"
-#  - name: create minio tenant
-#    ansible.builtin.shell: "kubectl  minio tenant create minio --servers 5 --volumes 5 --capacity 50Gi --namespace minio --storage-class local-storage "
+        rootUser: "{{minio_accesskey}}"
+        rootPassword: "{{minio_secretkey}}"
+        persistence:
+          storageClass: "longhorn"
+        volumePermissions:
+          enabled: true
   - name: Create minio secret for Jupyter
     community.kubernetes.k8s:
       definition:
@@ -227,6 +214,86 @@
       api_version: v1
       kind: Namespace
       state: present
+  - name: Create a SA for holdenk
+    community.kubernetes.k8s:
+      name: holdenk
+      namespace: jhub
+      api_version: v1
+      kind: serviceaccount
+      state: present
+  - name: Create a role binding dask
+    community.kubernetes.k8s:
+      name: jhub-holdenk-rb-dask
+      namespace: dask
+      definition:
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: edit
+        subjects:
+        - kind: ServiceAccount
+          name: holdenk
+          namespace: jhub
+      api_version: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      state: present
+  - name: Create a role binding spark
+    community.kubernetes.k8s:
+      name: jhub-holdenk-rb-spark
+      namespace: dask
+      definition:
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: edit
+        subjects:
+        - kind: ServiceAccount
+          name: holdenk
+          namespace: jhub
+      api_version: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      state: present
+  - name: Create a role binding holdenk ray
+    community.kubernetes.k8s:
+      name: jhub-holdenk-rb-ray
+      namespace: ray
+      definition:
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: edit
+        subjects:
+        - kind: ServiceAccount
+          name: holdenk
+          namespace: jhub
+      api_version: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      state: present
+# Mika role binding
+  - name: Create a SA for mkimmins
+    community.kubernetes.k8s:
+      name: mkimmins
+      namespace: jhub
+      api_version: v1
+      kind: serviceaccount
+      state: present
+  - name: Create a role binding mika
+    community.kubernetes.k8s:
+      name: jhub-mika-rb
+      namespace: mika
+      definition:
+        roleRef:
+          apiGroup: rbac.authorization.k8s.io
+          kind: ClusterRole
+          name: edit
+        subjects:
+        - kind: ServiceAccount
+          name: mkimmins
+          namespace: jhub
+      api_version: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      state: present
+#Generic
   - name: Create a SA for Spark
     community.kubernetes.k8s:
       name: spark
@@ -234,7 +301,7 @@
       api_version: v1
       kind: serviceaccount
       state: present
-  - name: Create a SA for Spark
+  - name: Create a role for Spark
     community.kubernetes.k8s:
       name: spark-rb
       namespace: spark
@@ -426,7 +493,41 @@
             name: letsencrypt-prod
             kind: ClusterIssuer
       state: present
-  - name: Create greenIOT Ingress
+  - name: Create longhorn certificate
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: longhorn-tls
+          namespace: longhorn-system
+        spec:
+          commonName: longhorn.pigscanfly.ca
+          secretName: longhorn-tls
+          dnsNames:
+            - longhorn.pigscanfly.ca
+          issuerRef:
+            name: letsencrypt-prod
+            kind: ClusterIssuer
+      state: present
+  - name: Create jupyter certificate
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: cert-manager.io/v1
+        kind: Certificate
+        metadata:
+          name: k3s-jupyter-tls
+          namespace: jhub
+        spec:
+          commonName: jupyter.pigscanfly.ca
+          secretName: k3s-jupyter-tls
+          dnsNames:
+            - jupyter.pigscanfly.ca
+          issuerRef:
+            name: letsencrypt-prod
+            kind: ClusterIssuer
+      state: present
+  - name: Create greenIOT Ingress http
     community.kubernetes.k8s:
       definition:
         apiVersion: networking.k8s.io/v1
@@ -434,7 +535,34 @@
         metadata:
           name: iot-web-ingress
           namespace: greeniot
+          annotations:
+            kubernetes.io/ingress.class: traefik
+            traefik.ingress.kubernetes.io/router.entrypoints: web
+        spec:
+          rules:
+          - host: "*.opengreeniot.com"
+            http:
+              paths:
+              - path: "/"
+                pathType: Prefix
+                backend:
+                  service:
+                    name: iot-web-service
+                    port:
+                      number: 80
+  - name: Create greenIOT Ingress https
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: iot-web-ingress-https
+          namespace: greeniot
           cert-manager.io/cluster-issuer: letsencrypt-prod
+          annotations:
+            kubernetes.io/ingress.class: traefik
+            traefik.ingress.kubernetes.io/router.entrypoints: web, websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"
         spec:
           tls:
             - secretName: greeniot-tls
@@ -452,4 +580,58 @@
                     name: iot-web-service
                     port:
                       number: 80
-      state: present
+  - name: Create longhorn auth middleware
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: traefik.containo.us/v1alpha1
+        kind: Middleware
+        metadata:
+          name: lhauth
+          namespace: longhorn-system
+        spec:
+          basicAuth:
+            secret: basic-auth
+  - name: Create longhorn auth middleware
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: traefik.containo.us/v1alpha1
+        kind: Middleware
+        metadata:
+          name: svc-longhorn-headers
+          namespace: longhorn-system
+        spec:
+          headers:
+            customRequestHeaders:
+              X-Forwarded-Proto: "https"
+# Traefik 2+ doesn't support ingress.kubernetes.io/auth-type and I can't be bothered to figure out their middle were just use kubectl fwd
+  - name: Create longhorn Ingress http https
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: networking.k8s.io/v1
+        kind: Ingress
+        metadata:
+          name: longhorn-ingress
+          namespace: longhorn-system
+          annotations:
+            traefik.ingress.kubernetes.io/router.entrypoints: websecure
+            traefik.ingress.kubernetes.io/router.tls: "true"       
+            traefik.ingress.kubernetes.io/router.middlewares: longhorn-system-svc-longhorn-headers@kubernetescrd
+            kubernetes.io/ingress.class: traefik
+            # type of authentication
+            traefik.ingress.kubernetes.io/router.middlewares: longhorn-system-lhauth@kubernetescrd
+        spec:
+          tls:
+            - secretName: longhorn-tls
+              hosts:
+              - longhorn.pigscanfly.ca
+          rules:
+            - host: "longhorn.pigscanfly.ca"
+              http:
+                paths:
+                - pathType: Prefix
+                  path: "/"
+                  backend:
+                    service:
+                      name: longhorn-frontend
+                      port:
+                        number: 80

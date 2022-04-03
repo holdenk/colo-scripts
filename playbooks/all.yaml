@@ -25,3 +25,8 @@
       state: latest
       update_cache: true
     become: true
+  - name: Upgrade packages
+    apt:
+      update_cache: true
+      upgrade: yes
+    become: true

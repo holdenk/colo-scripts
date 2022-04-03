@@ -49,8 +49,8 @@ all:
               hosts:
                 k8s-leader:
                   ansible_user: root
-                k8s-worker-100:
-                  ansible_user: root
+#                k8s-worker-100:
+#                  ansible_user: root
                 k8s-worker-102:
                   ansible_user: root
             docker-hosts:
@@ -60,11 +60,14 @@ all:
                     k8s-worker-nv1:
                     k8s-worker-nv2:
                     k8s-worker-nv3:
+                amd-gpus:
+                  hosts:
+                    experiment221:
                 x86:
                   hosts:
                     experiment626:
                     experiment624:
                     bubbles:
-                    experiment221:
                     experiment625:
+                    jumba:
 localhost:
