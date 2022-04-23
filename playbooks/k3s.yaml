@@ -46,6 +46,21 @@
     args:
       creates: /usr/local/bin/k3sup
     become: true
+  - name: Limit multipath
+    ansible.builtin.copy:
+      content: '
+blacklist {
+    devnode "^sd[a-z0-9]+"
+}
+defaults {
+    user_friendly_names yes
+}
+'
+      dest: /etc/multipath.conf
+    become: true
+  - name: Restart mutlipath
+    ansible.builtin.shell: "systemctl restart multipathd.service || echo \"no multipath yay\""
+    become: true
 - hosts: kube-leader
   tasks:
   - name: Install docker

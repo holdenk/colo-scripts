@@ -26,8 +26,8 @@
   - name: Install MariaDB Postgresql and friends
     apt:
       pkg:
-        - postgresql-12
-        - postgresql-12-repmgr
+        - postgresql-14
+        - postgresql-14-repmgr
         - postgresql-client-common
         - libpq-dev
         - mariadb-client
@@ -37,6 +37,9 @@
         - python3-pip
       state: latest
       update_cache: true
+  - name: Upgrade cluster just incase
+    ansible.builtin.shell: "pg_upgradecluster"
+    become: yes
   - name: Install psycopg2 python package
     pip:
       name: psycopg2
@@ -115,7 +118,7 @@
       value: 'on'
   - name: Enable replication user to login
     blockinfile:
-      path: /var/lib/pgsql/12/data/pg_hba.conf
+      path: /var/lib/pgsql/14/data/pg_hba.conf
       block: |
         {% for host in groups['db_hosts'] %}
         host    replication     replusr     {{ hostvars[host]['ansible_facts']['ens3']['ipv4']['address'] }}/32    md5
@@ -123,7 +126,7 @@
   - name: Restart database
     systemd:
       state: restarted
-      name: postgresql-12
+      name: postgresql-14
     become: yes
     when: standby_status.stat.exists == False
   - name: Create a new database with name spacebeaver
@@ -229,23 +232,23 @@
   - name: Stop database
     systemd:
       state: stopped
-      name: postgresql-12
+      name: postgresql-14
     become: yes
 #    - name: Remove data
 #      file:
 #        state: absent
-#        path: "/var/lib/pgsql/12/data/"
+#        path: "/var/lib/pgsql/14/data/"
   - name: Check if database is already initialized
     stat:
-      path: '/var/lib/pgsql/12/data/PG_VERSION'
+      path: '/var/lib/pgsql/14/data/PG_VERSION'
     register: init_status
   - name: Initialize the slave database
-    shell: "pg_basebackup -D /var/lib/pgsql/12/data -h {{ master_host }} -X stream -c fast -U {{ repl_user }} -w -R"
+    shell: "pg_basebackup -D /var/lib/pgsql/14/data -h {{ master_host }} -X stream -c fast -U {{ repl_user }} -w -R"
     when: init_status.stat.exists == False
   - name: Start database
     systemd:
       state: started
-      name: postgresql-12
+      name: postgresql-14
     become: yes
   - name: Wait for postgres to listen on port 5432
     wait_for:
