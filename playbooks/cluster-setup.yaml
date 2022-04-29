@@ -157,7 +157,7 @@
           - "--certificatesresolvers.le.acme.storage=/data/acme.json"
           - "--certificatesresolvers.le.acme.tlschallenge=true"
           - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
-          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
+#          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
 #          - "--certificatesresolvers.le.acme.httpchallenge=true"
 #          - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
           - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
