@@ -187,7 +187,7 @@
 #          - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
 #          - "--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
         persistence:
-          enable: false
+          enable: true
           accessMode: ReadWriteMany
           existingClaim: "traefik-certs"
           size: 512m
