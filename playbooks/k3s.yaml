@@ -71,7 +71,7 @@ defaults {
         - docker-ce-cli
     become: yes
   - name: Install k3s leader
-    ansible.builtin.shell: "k3sup install --k3s-version v1.23.3+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik'"
+    ansible.builtin.shell: "k3sup install --k3s-version v1.23.6+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
@@ -85,7 +85,7 @@ defaults {
 - hosts: pis
   tasks:
   - name: Install k3s workers with containerd & storage role
-    ansible.builtin.shell: "k3sup join --k3s-version v1.23.3+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.23.6+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -109,7 +109,7 @@ defaults {
         - nvidia-docker2
     become: yes
   - name: Install k3s workers with docker
-    ansible.builtin.shell: "k3sup join --k3s-version v1.23.3+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--docker --node-label node.kubernetes.io/gpu=gpu'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.23.6+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--docker --node-label node.kubernetes.io/gpu=gpu'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -131,7 +131,7 @@ defaults {
 - hosts: amd-gpus
   tasks:
   - name: Install on AMD GPU hosts
-    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version v1.23.3+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
+    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version v1.23.6+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -153,7 +153,7 @@ defaults {
 - hosts: x86
   tasks:
   - name: Install k3s workers with docker
-    ansible.builtin.shell: "k3sup join --k3s-version v1.23.3+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.23.6+k3s1 --server-host nano-4gb.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true

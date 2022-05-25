@@ -137,16 +137,38 @@
         installCRDs: true
   - name: Configure cert manager issuer
     ansible.builtin.shell: "kubectl apply -f /home/holden/repos/scalingpythonml/certificate-stuff/letsencrypt-issuer-production.yaml"
+  - name: Configure traefik-system ns
+    community.kubernetes.k8s:
+      kind: namespace
+      name: traefik-system
+      state: present
+  - name: Configure traefik-certs volume
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: PersistentVolumeClaim
+        metadata:
+          namespace: traefik-system
+          name: traefik-certs
+        spec:
+          accessModes:
+          - ReadWriteMany
+          resources:
+            requests:
+              storage: 512m
+          storageClassName: longhorn
+      state: present
   - name: Deploy trafeik
     kubernetes.core.helm:
       name: traefik
       chart_ref: traefik/traefik
       release_namespace: traefik-system
+      chart_version: v10.19.5
       create_namespace: true
       values:
 # To configure how we want things to go
         additionalArguments:
-          - "--log.level=DEBUG"
+          - "--log.level=INFO"
 #          - "--providers.kubernetesIngress.ingressClass=traefik-cert-manager"
           - "--global.checknewversion"
           - "--global.sendanonymoususage"
@@ -157,17 +179,17 @@
           - "--certificatesresolvers.le.acme.storage=/data/acme.json"
           - "--certificatesresolvers.le.acme.tlschallenge=true"
           - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
-#          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
+          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
 #          - "--certificatesresolvers.le.acme.httpchallenge=true"
 #          - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
-          - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-          - "--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-          - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-          - "--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
+#          - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
+#          - "--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
+#          - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
+#          - "--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
         persistence:
-          enable: true
-          storageClass: longhorn
+          enable: false
           accessMode: ReadWriteMany
+          existingClaim: "traefik-certs"
           size: 512m
           path: "/data"
         ingressClass:
