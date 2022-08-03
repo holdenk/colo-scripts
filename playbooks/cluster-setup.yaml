@@ -41,6 +41,12 @@
       api_version: v1
       kind: Namespace
       state: present
+  - name: Create a spacebeaver namespace
+    community.kubernetes.k8s:
+      name: spacebeaver
+      api_version: v1
+      kind: Namespace
+      state: present
 # Extra ns for mika
   - name: Create a mika namespace
     community.kubernetes.k8s:
@@ -50,6 +56,34 @@
       state: present
   - name: Install metallb
     ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml; sleep 1; kubectl apply -f /home/holden/repos/colo-scripts/metallb.yaml; sleep 1"
+  - name: Create spacebeaver secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: spacebeaver-secret
+          namespace: spacebeaver
+        stringData:
+          STRIPE_LIVE_SECRET_KEY: "{{SPACEBEAVER_STRIPE_LIVE_SECRET_KEY}}"
+          STRIPE_LIVE_PUBLIC_KEY: "{{SPACEBEAVER_STRIPE_LIVE_PUBLIC_KEY}}"
+          SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
+          DATA_NETLOC: "postgresql://spacebeaver:{{spacebeaver_db_pw}}@nani.pigscanfly.ca/spacebeaver"
+      state: present
+  - name: Create spacebeaver config
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: ConfigMap
+        metadata:
+          name: spacebeaver-web-config
+          namespace: spacebeaver
+        type: Opaque
+        data:
+          DOMAIN: "spacebeaver.com"
+          STATIC_URL: "/static/"
+          MEDIA_URL: "/media/"
+      state: present    
   - name: Create metallb secret
     community.kubernetes.k8s:
       definition:
