@@ -69,6 +69,9 @@
           STRIPE_LIVE_PUBLIC_KEY: "{{SPACEBEAVER_STRIPE_LIVE_PUBLIC_KEY}}"
           SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
           DATA_NETLOC: "postgresql://spacebeaver:{{spacebeaver_db_pw}}@nani.pigscanfly.ca/spacebeaver"
+          RABBITMQ_DEFAULT_USER: "django"
+          RABBITMQ_DEFAULT_PASS: "{{SPACEBEAVER_RABIT_MQ_PASS}}"
+          BROKER_NETLOCK: "pyamqp://django:{{SPACEBEAVER_RABIT_MQ_PASS}}@rabbitmq-service:5672//"
       state: present
   - name: Create spacebeaver config
     community.kubernetes.k8s:
@@ -123,11 +126,11 @@
               addresses:
               - 23.177.16.200/26
       state: present
-  - name: Install helm
-    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
-    args:
-      creates: /usr/local/bin/helm
-    become: true
+#  - name: Install helm
+#    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
+#    args:
+#      creates: /usr/local/bin/helm
+#    become: true
   - name: Add bitnami chart
     kubernetes.core.helm_repository:
       name: bitnami
@@ -165,7 +168,7 @@
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.7.1
+      chart_version: v1.9.1
       create_namespace: true
       values:
         installCRDs: true
@@ -569,58 +572,6 @@
             port: 80
             targetPort: 80
             protocol: TCP
-  - name: Create greenIOT Ingress http
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: iot-web-ingress
-          namespace: greeniot
-          annotations:
-            kubernetes.io/ingress.class: traefik
-            traefik.ingress.kubernetes.io/router.entrypoints: web
-        spec:
-          rules:
-          - host: "*.opengreeniot.com"
-            http:
-              paths:
-              - path: "/"
-                pathType: Prefix
-                backend:
-                  service:
-                    name: iot-web-service
-                    port:
-                      number: 80
-  - name: Create greenIOT Ingress https
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: iot-web-ingress-https
-          namespace: greeniot
-          annotations:
-            kubernetes.io/ingress.class: traefik
-            traefik.ingress.kubernetes.io/router.tls.certresolver: le
-            traefik.ingress.kubernetes.io/router.entrypoints: websecure
-            traefik.ingress.kubernetes.io/router.tls: "true"
-          spec:
-            tls:
-              - hosts:
-                  - www.opengreeniot.com
-                  - "*.opengreeniot.com"
-            rules:
-              - host: "*.opengreeniot.com"
-                http:
-                  paths:
-                    - path: "/"
-                      pathType: Prefix
-                      backend:
-                        service:
-                          name: iot-web-service
-                        port:
-                          number: 80
   - name: Create longhorn auth middleware
     community.kubernetes.k8s:
       definition:

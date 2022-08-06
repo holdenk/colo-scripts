@@ -30,3 +30,12 @@
       update_cache: true
       upgrade: yes
     become: true
+- hosts: kubernetes
+  become: true
+  serial: 1
+  roles:
+  - role: GROG.reboot
+    reboot_connect_timeout: 120
+    reboot_interval: yes
+    reboot_interval_seconds: 480
+    reboot_wait_timeout: 900
