@@ -71,7 +71,7 @@
           DATA_NETLOC: "postgresql://spacebeaver:{{spacebeaver_db_pw}}@nani.pigscanfly.ca/spacebeaver"
           RABBITMQ_DEFAULT_USER: "django"
           RABBITMQ_DEFAULT_PASS: "{{SPACEBEAVER_RABIT_MQ_PASS}}"
-          BROKER_NETLOCK: "pyamqp://django:{{SPACEBEAVER_RABIT_MQ_PASS}}@rabbitmq-service:5672//"
+          BROKER_NETLOC: "pyamqp://django:{{SPACEBEAVER_RABIT_MQ_PASS}}@rabbitmq-service.svc:5672/"
       state: present
   - name: Create spacebeaver config
     community.kubernetes.k8s:
