@@ -1,0 +1,131 @@
+---
+- hosts: route-server
+  tasks:
+  - name: Install some networking tools
+    apt:
+      pkg:
+        - inetutils-traceroute
+        - inetutils-ping
+        - axel
+        - nmap
+        - tshark
+        - build-essential
+        - git
+        - bgpq4
+    become: yes
+  - name: configure global bgp as AS399306
+    include_role:
+      name: mrlesmithjr.frr
+    vars:
+      frr_version: 7.5.1
+      frr_logging: file /var/log/frr-log info
+      frr_ip_forwarding: false
+      frr_ipv6_forwarding: false
+      frr_daemons:
+        bfdd: false
+        bgpd: false
+        isisd: false
+        ldpd: false
+        nhrpd: false
+        ospf6d: false
+        ospfd: false
+        pimd: false
+        ripd: false
+        ripngd: false
+        zebra: true
+      frr_prefix_list:
+        Bad_IPs:
+          05 permit:
+            prefix: 192.168.88.0/24
+            match: ge 32
+          10 permit:
+            prefix: 172.16.0.0/16
+            match: le 32
+        DefaultOnlyV4:
+          10 permit:
+            prefix: 0.0.0.0/0
+          20 deny:
+            prefix: any
+        MetallbV4:
+          10 permit:
+            prefix: any
+        AnnounceV4:
+          10 permit:
+            prefix: 23.177.16.0/24
+          20 permit:
+            prefix: 209.209.73.0/24
+          30 deny:
+            prefix: any
+        AcceptMostV4:
+          10 deny:
+            prefix: "0.0.0.0/0"
+          20 permit:
+            prefix: any
+      frr_prefix_list_v6:
+        Bad_IPs:
+          05 permit:
+            prefix: 1234:5678::/32
+            match: ge 128
+        AcceptMostV6:
+          10 deny:
+            prefix: "::/0"
+          20 permit:
+            prefix: any
+        AnnounceV6:
+          05 permit:
+            prefix: 2602:FCB1::/36
+          10 deny:
+            prefix: any
+        DefaultOnlyV6:
+          40 deny:
+            prefix: any
+        MetallbV6:
+          10 permit:
+            prefix: any
+      frr_bgp:
+        asns:
+          399306:
+            log_neighbor_changes: true
+            no_ebgp_requires_policy: true
+            other:
+              - "bgp bestpath as-path multipath-relax"
+              - "no bgp network import-check"
+            neighbors:
+              23.177.73.1:
+                asn: 399306
+                other:
+                  - "prefix-list AnnounceV4 out"
+                  - "prefix-list AcceptMostV4 in"
+              "2602:fcb1::1":
+                asn: 399306
+                other:
+                  - "prefix-list AnnounceV4 out"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+                  - "prefix-list AcceptMostV6 in"
+              209.209.73.11:
+                asn: 53758
+                other:
+                  - "prefix-list AnnounceV4 out"
+              "2602:fcb1::11":
+                asn: 53758
+                other:
+                  - "prefix-list AnnounceV4 out"
+                af_v6:
+                  - "activate"
+                  - "prefix-list AnnounceV6 out"
+  - name: Configure zebra
+    ansible.builtin.lineinfile:
+      path: /etc/frr/daemons
+      line: zebra_options="  -A 127.0.0.1 --retain --nl-bufsize 9000000012 --v6-rr-semantics"
+    become: yes
+#  - name: Disable zebra nexthop (seeing crashes)
+#    ansible.builtin.lineinfile:
+#      path: /etc/frr/frr.conf
+#      line: no zebra nexthop kernel enable
+#    become: yes
+  - name: Reload the config
+    ansible.builtin.shell: /etc/init.d/frr reload
+    become: yes
+

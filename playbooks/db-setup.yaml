@@ -7,10 +7,19 @@
       url: https://dl.2ndquadrant.com/gpg-key.asc
       state: present
     become: yes
-#  - name: Add apt repo for 2ndquadrant
-#    ansible.builtin.apt_repository:
-#      repo: "deb [arch=amd64] https://dl.2ndquadrant.com/default/release/apt {{ ansible_distribution_release }}-2ndquadrant main"
-#    become: yes
+  - name: Add an apt signing key for postgresql
+    ansible.builtin.apt_key:
+      url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+      state: present
+    become: yes
+  - name: Add apt repo for 2ndquadrant (postgresql)
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64] https://dl.2ndquadrant.com/default/release/apt {{ ansible_distribution_release }}-2ndquadrant main"
+    become: yes
+  - name: Add apt repo for postgresql
+    ansible.builtin.apt_repository:
+      repo: "deb [arch=amd64] http://apt.postgresql.org/pub/repos/apt {{ ansible_distribution_release }}-pgdg main"
+    become: yes
   - name: Add the mariadb mount directory to fstab
     ansible.builtin.lineinfile:
       path: /etc/fstab
@@ -18,7 +27,7 @@
   - name: Add the mariadb mount directory to fstab
     ansible.builtin.lineinfile:
       path: /etc/fstab
-      line: "{{data_dir}}/postgresql /var/lib/postgresql none defaults,bind 0 0" 
+      line: "{{data_dir}}/postgresql /var/lib/postgresql none defaults,bind 0 0"
   - name: Create the db directories and bind mount it (see https://github.com/geerlingguy/ansible-role-mysql/issues/377)
     ansible.builtin.shell: "mkdir -p {{data_dir}}/mariadb && mkdir {{data_dir}}/postgresql && mkdir -p /var/lib/mysql && mkdir -p /var/lib/postgresql && mount /var/lib/mysql && mount /var/lib/postgresql"
     args:
@@ -35,11 +44,15 @@
         - python3-mysqldb
         - python3-pymysql
         - python3-pip
+        - acl # Needed to be able to become non-root user
+        - language-pack-en-base
+        - language-pack-en
+        - mariadb-backup
       state: latest
       update_cache: true
-  - name: Upgrade cluster just incase
-    ansible.builtin.shell: "pg_upgradecluster"
-    become: yes
+#  - name: Upgrade cluster just incase
+#    ansible.builtin.shell: "pg_upgradecluster"
+#    become: yes
   - name: Install psycopg2 python package
     pip:
       name: psycopg2
@@ -73,8 +86,10 @@
 
   - name: Restart the server to pick up the bind address (note reload isn't enough)
     ansible.builtin.shell: "netstat --tcp -l |grep '{{bind_address}}:mysql' || /etc/init.d/mysql restart"
+    ignore_errors: true
   - name: Reload the server regardless
     ansible.builtin.shell: "/etc/init.d/mysql reload"
+    ignore_errors: true
 - hosts: db-leader
   become: yes
   tasks:
@@ -84,76 +99,105 @@
       state: started
       name: postgresql.service
     become: yes
+  - name: Configure DBs to listen on ip address
+    postgresql_set:
+      name: listen_addresses
+      value: '*'
+    become: yes
+    become_user: postgres
   - name: Create replication user, set MD5-hashed password, grant privs
     postgresql_user:
-      name: replusr
-      password: "{{ 'md5' + ((repl_passwd + repl_user) | hash('md5')) }}"
+      name: "{{repl_user}}"
+      password: "{{repl_passwd}}"
       role_attr_flags: REPLICATION
       priv: ALL
       db: postgres
     become_user: postgres
-  - name: Configure DBs to listen on ip address
-    postgresql_set:
-      name: listen_addresses
-      value: 'localhost,{{ ansible_ens3.ipv4.address }}'
+    become: yes
   - name: Configure wal_level parameter
     postgresql_set:
       name: wal_level
       value: 'replica'
+    become_user: postgres
+    become: yes
   - name: Configure wal_log_hints parameter
     postgresql_set:
       name: wal_log_hints
       value: 'on'
+    become_user: postgres
+    become: yes
   - name: Configure max_wal_senders parameter
     postgresql_set:
       name: max_wal_senders
       value: '8'
-  - name: Configure wal_keep_segments parameter
+    become_user: postgres
+    become: yes
+  - name: Configure wal_keep_size parameter (in MB)
     postgresql_set:
-      name: wal_keep_segments
-      value: '8'
+      name: wal_keep_size
+      value: '500'
+    become_user: postgres
+    become: yes
   - name: Configure hot_standby parameter
     postgresql_set:
       name: hot_standby
       value: 'on'
-  - name: Enable replication user to login
+    become_user: postgres
+    become: yes
+  - name: Enable replication user to login but only from our IP range.
     blockinfile:
-      path: /var/lib/pgsql/14/data/pg_hba.conf
+      path: /etc/postgresql/14/main/pg_hba.conf
       block: |
-        {% for host in groups['db_hosts'] %}
-        host    replication     replusr     {{ hostvars[host]['ansible_facts']['ens3']['ipv4']['address'] }}/32    md5
-        {% endfor %}
+        host    replication     {{repl_user}}    23.177.16.0/24    md5
+        host    spacebeaver     spacebeaver    23.177.16.0/24    md5
+        host    spacebeaver     spacebeaver   2602:FCB1::/36    md5
+        host    replication     {{repl_user}}   2602:FCB1::/36 md5
   - name: Restart database
     systemd:
       state: restarted
-      name: postgresql-14
+      name: postgresql
     become: yes
-    when: standby_status.stat.exists == False
   - name: Create a new database with name spacebeaver
     community.postgresql.postgresql_db:
       name: spacebeaver
+    become_user: postgres
+    become: yes
   - name: Spacebeaver permissions
     community.postgresql.postgresql_user:
       db: spacebeaver
       name: spacebeaver
       password: "{{spacebeaver_db_pw}}"
       priv: "ALL"
+    become_user: postgres
+    become: yes
 #mysql
   - name: Create mysql databases
     community.mysql.mysql_db:
       name:
         - opengreeniot
         - metastore
+        - fuckhealthinsurance
         - spacebeaver
         - spacebeaver_admin
+        - blesta
+        - pcf-web
+        - cacti
       state: present
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+      login_unix_socket: /var/run/mysqld/mysqld.sock
   - name: Removes all anonymous user accounts
     community.mysql.mysql_user:
       name: ''
       host_all: yes
       state: absent
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create pcfweb
+    community.mysql.mysql_user:
+      state: present
+      name: pcfweb
+      password: "{{pcfweb_db_pw}}"
+      host: "%"
+      priv: "pcf-web.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
   - name: Create opengreeniotuser
     community.mysql.mysql_user:
       state: present
@@ -162,6 +206,22 @@
       host: "%"
       priv: "opengreeniot.*:ALL"
       login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create blesta
+    community.mysql.mysql_user:
+      state: present
+      name: blesta
+      password: "{{blesta_db_pw}}"
+      host: "%"
+      priv: "blesta.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create cacti
+    community.mysql.mysql_user:
+      state: present
+      name: cacti
+      password: "{{cacti_db_pw}}"
+      host: "%"
+      priv: "cacti.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
   - name: Create opengreeniotuser
     community.mysql.mysql_user:
       state: present
@@ -169,7 +229,15 @@
       password: "{{spacebeaver_db_pw}}"
       host: "%"
       priv: "spacebeaver%.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create opengreeniotuser
+    community.mysql.mysql_user:
+      state: present
+      name: fuckhealthinsurance
+      password: "{{fuckhealthinsurance_db_pw}}"
+      host: "%"
+      priv: "fuckhealthinsurance%.*:ALL"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
   - name: Create iceberg user
     community.mysql.mysql_user:
       state: present
@@ -177,7 +245,7 @@
       password: "{{iceberg_db_pw}}"
       host: "%"
       priv: "metastore.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+      login_unix_socket: /var/run/mysqld/mysqld.sock
   - name: Create holden user
     community.mysql.mysql_user:
       name: holden
@@ -191,76 +259,187 @@
       host: "%"
       password: "{{mysql_replication_pw}}"
       priv: "*.*:REPLICATION SLAVE"
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create repl user
+    community.mysql.mysql_user:
+      name: magic-replication-user
+      host: "jumba.pigscanfly.ca"
+      password: "{{mysql_replication_pw}}"
+      priv: "*.*:REPLICATION SLAVE"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create repl user
+    community.mysql.mysql_user:
+      name: magic-replication-user
+      host: "david.pigscanfly.ca"
+      password: "{{mysql_replication_pw}}"
+      priv: "*.*:REPLICATION SLAVE"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: create temporary backup directory on master
+    tempfile:
+      state: directory
+      prefix: ansible-
+      suffix: .mysqlslave
+    register: backupdir
+  - name: dump database from master
+    shell:
+      mariabackup --backup --target-dir {{ backupdir.path }}/dump
+  - name: compress database dump
+    archive:
+      path: "{{ backupdir.path }}/dump/"
+      dest: "{{ backupdir.path }}/dump.tar.gz"
+      format: gz
+      owner: root
+      group: root
+      mode: 0600
+      remove: true
+  - name: download database dump from master
+    fetch:
+      src: "{{ backupdir.path }}/dump.tar.gz"
+      dest: "/tmp/dump.tar.gz"
+      flat: true
+  - name: remove database dump from master
+    file:
+      path: "{{ backupdir.path }}"
+      state: absent
 - hosts: db-followers
   become: yes
   tasks:
-  - name: Stop any existing replication
-    community.mysql.mysql_replication:
-      mode: stopreplica
-      fail_on_error: no
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-      connection_name: master-1
-  - name: On MariaDB change master to use GTID current_pos
-    community.mysql.mysql_replication:
-      mode: changemaster
-      master_use_gtid: slave_pos
-      master_user: magic-replication-user
-      master_password: "{{mysql_replication_pw}}"
-      master_host: nani.pigscanfly.ca
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-      connection_name: master-1
+    - name: stop MySQL on slave
+      service:
+        name: mysql
+        state: stopped
+    - name: uplaod db dump
+      copy:
+        src: "/tmp/dump.tar.gz"
+        dest: "/tmp/"
+    - name: delete slave data
+      file:
+        path: /var/lib/mysql
+        state: absent
+      ignore_errors: true
+    - name: create /var/lib/mysql
+      file:
+        path: /var/lib/mysql
+        state: directory
+        owner: mysql
+        group: mysql
+        mode: 0750
+      ignore_errors: true
+    - name: create /tmp/mysql-dump
+      file:
+        path: /tmp/mysql-dump
+        state: directory
+      ignore_errors: true
+    - name: uncompress database dump
+      unarchive:
+        src: "/tmp/dump.tar.gz"
+        dest: /tmp/mysql-dump
+        owner: mysql
+        group: mysql
+    - name: prepare backup restore
+      command:
+        mariabackup --prepare --target-dir /tmp/mysql-dump
+      become_user: mysql
+    - name: restore
+      command:
+        mariabackup --copy-back --target-dir /tmp/mysql-dump
+      become_user: mysql
+    - name: start MySQL on slave
+      service:
+        name: mysql
+        state: started
+    - name: get binlog file
+      shell: grep binlog_pos /var/lib/mysql/xtrabackup_info | cut -d "'" -f 2
+      register: binlog_file
+    - name: get binlog position
+      shell: grep binlog_pos /var/lib/mysql/xtrabackup_info | cut -d "'" -f 4
+      register: binlog_position
+    - name: Stop any existing replication
+      community.mysql.mysql_replication:
+        mode: stopreplica
+        fail_on_error: no
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        connection_name: master-1
+    - name: On MariaDB change master to use GTID current_pos
+      community.mysql.mysql_replication:
+        mode: changeprimary
+        master_use_gtid: replica_pos
+        master_user: magic-replication-user
+        master_password: "{{mysql_replication_pw}}"
+        master_log_file: "{{ binlog_file.stdout }}"
+        master_log_pos: "{{ binlog_position.stdout }}"
+        master_host: nani.pigscanfly.ca
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        connection_name: master-1
 # This _might_ fail in which case just re-run it
-  - name: Run start replica and fail the task on errors
-    community.mysql.mysql_replication:
-      mode: startreplica
-      connection_name: master-1
-      fail_on_error: yes
-      login_unix_socket: /var/run/mysqld/mysqld.sock 
+    - name: Run start replica and fail the task on errors
+      community.mysql.mysql_replication:
+        mode: startreplica
+        connection_name: master-1
+        fail_on_error: yes
+        login_unix_socket: /var/run/mysqld/mysqld.sock
 # TODO: set up postgres replication
 #postgres
-  - name: pgpass for non interactive logins to the other node
-    blockinfile:
-      path: /var/lib/pgsql/.pgpass
-      create: yes
-      mode: 0600
-      block: |
-        # hostname:port:database:username:password
-        {% for host in groups['databases'] %}
-        {{ hostvars[host]['inventory_hostname'] + ':5432:replication:' + repl_user + ':' + repl_passwd}}
-        {% endfor %}
-  - name: Stop database
-    systemd:
-      state: stopped
-      name: postgresql-14
-    become: yes
-#    - name: Remove data
-#      file:
-#        state: absent
-#        path: "/var/lib/pgsql/14/data/"
-  - name: Check if database is already initialized
-    stat:
-      path: '/var/lib/pgsql/14/data/PG_VERSION'
-    register: init_status
-  - name: Initialize the slave database
-    shell: "pg_basebackup -D /var/lib/pgsql/14/data -h {{ master_host }} -X stream -c fast -U {{ repl_user }} -w -R"
-    when: init_status.stat.exists == False
-  - name: Start database
-    systemd:
-      state: started
-      name: postgresql-14
-    become: yes
-  - name: Wait for postgres to listen on port 5432
-    wait_for:
-      port: 5432
-      delay: 2
-  - name: Configure recovery_target_timeline parameter
-    postgresql_set:
-      name: recovery_target_timeline
-      value: 'latest'
-    notify: Restart database
-  - name: Configure DBs to listen on ip address
-    postgresql_set:
-      name: listen_addresses
-      value: 'localhost,{{ ansible_ens3.ipv4.address }}'
-    notify: Restart database
+#  - name: pgpass for non interactive logins to the other node
+#    blockinfile:
+#      path: /var/lib/pgsql/.pgpass
+#      create: yes
+#      mode: 0600
+#      block: |
+#        # hostname:port:database:username:password
+#        {% for host in groups['database'] %}
+#        {{ hostvars[host]['inventory_hostname'] + ':5432:replication:' + repl_user + ':' + repl_passwd}}
+#        {% endfor %}
+    - name: Stop database
+      systemd:
+        state: stopped
+        name: postgresql
+      become: yes
+    - name: Remove data
+      file:
+        state: absent
+        path: "/var/lib/postgresql/14/main"
+    - name: Setup a pgpas for initial repl
+      blockinfile:
+        create: yes
+        mode: 0600
+        path: ~/.pgpass
+        block: |
+          {{ hostvars[groups['db-leader'][0]]['inventory_hostname'] }}:5432:replication:{{repl_user}}:{{repl_passwd}}
+      become: yes
+      become_user: postgres
+    - name: Check if database is already initialized
+      stat:
+        path: '/var/lib/postgresql/14/main/PG_VERSION'
+      register: init_status
+    - name: Initialize the replicated database
+      shell: "pg_basebackup -D /var/lib/postgresql/14/main/ -h {{ hostvars[groups['db-leader'][0]]['inventory_hostname'] }} -X stream -c fast -U {{ repl_user }} -w -R"
+      when: init_status.stat.exists == False
+      become: yes
+      become_user: postgres
+    - name: Start database
+      systemd:
+        state: started
+        name: postgresql
+      become: yes
+    - name: Wait for postgres to listen on port 5432
+      wait_for:
+        port: 5432
+        delay: 10
+    - name: Configure recovery_target_timeline parameter
+      postgresql_set:
+        name: recovery_target_timeline
+        value: 'latest'
+      notify: Restart database
+      become: yes
+      become_user: postgres
+    - name: Wait for postgres to listen on port 5432 post restart
+      wait_for:
+        port: 5432
+        delay: 10
+    - name: Configure DBs to listen on ip address
+      postgresql_set:
+        name: listen_addresses
+        value: 'localhost'
+      become: yes
+      become_user: postgres

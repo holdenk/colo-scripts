@@ -1,0 +1,21 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  namespace: metallb-system
+  name: config
+data:
+  config: |
+    peers:
+    - my-asn: 64512
+      peer-asn: 399306
+      peer-address: 23.177.16.1
+    address-pools:
+    - name: default
+      protocol: bgp
+      addresses:
+      - 23.177.16.200-23.177.16.250
+      bgp-advertisements:
+      - aggregation-length: 32
+        localpref: 100
+        communities:
+        - 64512:1234

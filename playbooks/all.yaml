@@ -22,6 +22,7 @@
         - telnet
         - htop
         - iputils-arping
+        - fail2ban
       state: latest
       update_cache: true
     become: true

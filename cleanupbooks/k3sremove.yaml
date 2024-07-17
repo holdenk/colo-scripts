@@ -2,11 +2,6 @@
 # Cleanup old install if desired
 - hosts: kubernetes
   tasks:
-  - name: Remove apt src
-    file:
-      path: "/etc/apt/sources.list.d/download_docker_com_linux_ubuntu.list"
-      state: absent
-    become: true
   - name: Remove k3s install
     ansible.builtin.shell: "k3s-uninstall.sh || k3s-agent-uninstall.sh || echo k"
     become: true
@@ -82,7 +77,12 @@
 #      state: absent
 #      purge: yes
 #    become: yes
-  - name: Bounce everything (yaaaay)
-    reboot:
-      reboot_timeout: 600
-    become: yes
+- hosts: kubernetes
+  become: true
+#  serial: 1
+#  roles:
+#  - role: GROG.reboot
+#    reboot_connect_timeout: 120
+#    reboot_interval: yes
+#    reboot_interval_seconds: 480
+#    reboot_wait_timeout: 900

@@ -7,6 +7,36 @@
       api_version: v1
       kind: Namespace
       state: present
+  - name: Create a cacti ns
+    community.kubernetes.k8s:
+      name: cacti
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Create cacti secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+
+        metadata:
+          name: cacti-secrets
+          namespace: cacti
+
+        type: Opaque
+
+        stringData:
+          DB_HOST: "nani.pigscanfly.ca"
+          DB_USER: "cacti"
+          DB_PASS: "{{ cacti_db_pw }}"
+          DB_NAME: "cacti"
+      state: present
+  - name: Create a pcfweb ns
+    community.kubernetes.k8s:
+      name: pcfweb
+      api_version: v1
+      kind: Namespace
+      state: present
   - name: Create longhorn secret
     ansible.builtin.shell: "(echo holden:$(openssl passwd -stdin -apr1 <<< {{longhorn_pw}}) >> auth); kubectl get secret -n longhorn-system basic-auth || kubectl -n longhorn-system create secret generic basic-auth --from-file=auth"
     args:
@@ -23,6 +53,12 @@
       api_version: v1
       kind: Namespace
       state: present
+  - name: Create a docker-registry ns
+    community.kubernetes.k8s:
+      name: docker-registry
+      api_version: v1
+      kind: Namespace
+      state: present
   - name: Create a ray ns
     community.kubernetes.k8s:
       name: ray
@@ -34,6 +70,21 @@
       name: metallb-system
       api_version: v1
       kind: Namespace
+      state: present
+  - name: Create metallb secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+
+        metadata:
+          name: memberlist
+          namespace: metallb-system
+
+        type: Opaque
+
+        stringData:
+          secretkey: "{{metallb_key}}"
       state: present
   - name: Create a jhub namespace
     community.kubernetes.k8s:
@@ -54,8 +105,30 @@
       api_version: v1
       kind: Namespace
       state: present
-  - name: Install metallb
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.9.6/manifests/namespace.yaml; sleep 1; kubectl apply -f /home/holden/repos/colo-scripts/metallb.yaml; sleep 1"
+  - name: Create pcfweb secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: pcfweb-secret
+          namespace: pcfweb
+        stringData:
+          STRIPE_LIVE_SECRET_KEY: "{{PCF_STRIPE_LIVE_SECRET_KEY}}"
+          STRIPE_LIVE_PUBLIC_KEY: "{{PCF_STRIPE_LIVE_PUBLIC_KEY}}"
+          STRIPE_TEST_SECRET_KEY: "{{PCF_STRIPE_TEST_SECRET_KEY}}"
+          STRIPE_TEST_PUBLIC_KEY: "{{PCF_STRIPE_TEST_PUBLIC_KEY}}"
+          DJSTRIPE_WEBHOOK_SECRET: "{{PCF_DJSTRIPE_WEBHOOK_SECRET}}"
+          DJANGO_CONFIGURATION: "Prod"
+          SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
+          DBUSER: "pcfweb"
+          DBNAME: "pcf-web"
+          DBPASSWORD: "{{pcfweb_db_pw}}"
+          DBHOST: "nani.pigscanfly.ca"
+          __ENV__: "Prod"
+          ENVIRONMENT: "Prod"
+          EMAIL_HOST_PASSWORD: "{{pcf_email_host_password}}"
+      state: present
   - name: Create spacebeaver secrets
     community.kubernetes.k8s:
       definition:
@@ -67,11 +140,66 @@
         stringData:
           STRIPE_LIVE_SECRET_KEY: "{{SPACEBEAVER_STRIPE_LIVE_SECRET_KEY}}"
           STRIPE_LIVE_PUBLIC_KEY: "{{SPACEBEAVER_STRIPE_LIVE_PUBLIC_KEY}}"
+          STRIPE_TEST_SECRET_KEY: "{{SPACEBEAVER_STRIPE_TEST_SECRET_KEY}}"
+          STRIPE_TEST_PUBLIC_KEY: "{{SPACEBEAVER_STRIPE_TEST_PUBLIC_KEY}}"
+          DJSTRIPE_WEBHOOK_SECRET: "{{SPACEBEAVER_DJSTRIPE_WEBHOOK_SECRET}}"
           SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
-          DATA_NETLOC: "postgresql://spacebeaver:{{spacebeaver_db_pw}}@nani.pigscanfly.ca/spacebeaver"
+          DATA_NETLOC: "postgresql://spacebeaver:{{spacebeaver_db_pw}}@nani.pigscanfly.ca:5432/spacebeaver"
           RABBITMQ_DEFAULT_USER: "django"
           RABBITMQ_DEFAULT_PASS: "{{SPACEBEAVER_RABIT_MQ_PASS}}"
-          BROKER_NETLOC: "pyamqp://django:{{SPACEBEAVER_RABIT_MQ_PASS}}@rabbitmq-service.svc:5672/"
+          BROKER_NETLOC: "pyamqp://django:{{SPACEBEAVER_RABIT_MQ_PASS}}@rabbitmq-service:5672/"
+          __ENV__: "Runtime"
+          ENVIRONMENT: "production"
+          SSL: "on"
+      state: present
+  - name: Create totallylegitco secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: fight-health-insurance-secret
+          namespace: totallylegitco
+        stringData:
+          STRIPE_LIVE_SECRET_KEY: "{{FUCK_STRIPE_LIVE_SECRET_KEY}}"
+          STRIPE_LIVE_PUBLIC_KEY: "{{FUCK_STRIPE_LIVE_PUBLIC_KEY}}"
+          STRIPE_TEST_SECRET_KEY: "{{FUCK_STRIPE_TEST_SECRET_KEY}}"
+          STRIPE_TEST_PUBLIC_KEY: "{{FUCK_STRIPE_TEST_PUBLIC_KEY}}"
+          DJSTRIPE_WEBHOOK_SECRET: "{{FUCK_DJSTRIPE_WEBHOOK_SECRET}}"
+          RECAPTCHA_PUBLIC_KEY: "{{FUCK_RECAPTCHA_PUBLIC_KEY}}"
+          RECAPTCHA_PRIVATE_KEY: "{{FUCK_RECAPTCHA_PRIVATE_KEY}}"
+          SECRET_KEY: "{{FUCK_DJANGO_SECRET_KEY}}"
+          DBPASSWORD: "{{fuckhealthinsurance_db_pw}}"
+          DBNAME: "fuckhealthinsurance"
+          DBUSER: "fuckhealthinsurance"
+          DBHOST: "nani.pigscanfly.ca"
+          __ENV__: "Runtime"
+          ENVIRONMENT: "Prod"
+          SSL: "on"
+          OPENAI_API_BASE: "https://api.endpoints.anyscale.com/v1"
+          OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
+          RUNPOD_API_KEY: "{{RUNPOD_API_KEY}}"
+          RUNPOD_ENDPOINT: "{{RUNPOD_ENDPOINT}}"
+          HEALTH_BACKEND_HOST: "{{HEALTH_BACKEND_HOST}}"
+          HEALTH_BACKEND_PORT: "{{HEALTH_BACKEND_PORT}}"
+          HEALTH_BACKEND_MODEL: "{{HEALTH_BACKEND_MODEL}}"
+          TOGETHER_KEY: "{{TOGETHER_KEY}}"
+          PERPLEXITY_API: "{{PERPLEXITY_API}}"
+      state: present
+  - name: Create spacebeaver Ray secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: spacebeaver-ray-secret
+          namespace: spacebeaver
+        stringData:
+          mail_server: "{{spacebeaver_mail_server}}"
+          mail_username: "{{spacebeaver_mail_username}}"
+          mail_password: "{{spacebeaver_mail_password}}"
+          swarm_username: "{{swarm_username}}"
+          swarm_password: "{{swarm_password}}"
       state: present
   - name: Create spacebeaver config
     community.kubernetes.k8s:
@@ -86,45 +214,6 @@
           DOMAIN: "spacebeaver.com"
           STATIC_URL: "/static/"
           MEDIA_URL: "/media/"
-      state: present    
-  - name: Create metallb secret
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: v1
-        kind: Secret
-
-        metadata:
-          name: memberlist
-          namespace: metallb-system
-
-        type: Opaque
-
-        data:
-          secretkey: "{{metallb_key}}"
-      state: present
-  - name: Configure metallb
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: v1
-        kind: ConfigMap
-        metadata:
-          namespace: metallb-system
-          name: config
-        data:
-          config: |
-            peers:
-              - peer-address: 64.71.157.129
-                peer-asn: 399306
-                my-asn: 399306
-                password: "{{metallb_bgp_pw}}"
-                node-selectors:
-                - match-labels:
-                    svccontroller.k3s.cattle.io/enablelb: true
-            address-pools:
-            - name: default
-              protocol: bgp
-              addresses:
-              - 23.177.16.200/26
       state: present
 #  - name: Install helm
 #    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
@@ -151,6 +240,10 @@
     kubernetes.core.helm_repository:
       name: traefik
       repo_url: "https://helm.traefik.io/traefik/"
+  - name: Add ingress-nginx chart
+    kubernetes.core.helm_repository:
+      name: ingress-nginx
+      repo_url: "https://kubernetes.github.io/ingress-nginx"
   - name: Add Rook Ceph chart
     kubernetes.core.helm_repository:
       name: rook-release
@@ -163,132 +256,162 @@
     kubernetes.core.helm_repository:
       name: jetstack
       repo_url: "https://charts.jetstack.io"
+  - name: Install metallb
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
+  - name: Deploy nginx
+    kubernetes.core.helm:
+      name: ingress-nginx
+      chart_ref: ingress-nginx/ingress-nginx
+      release_namespace: nginx
+      chart_version: 4.9.0
+      create_namespace: true
+      wait: yes
+      values:
+        controller:
+          service:
+            loadBalancerIP: 23.177.16.200
+            externalTrafficPolicy: Local
+          watchIngressWithoutClass: true
+          allowSnippetAnnotations: true
+          ipFamilyPolicy: PreferDualStack
+          ipFamilies:
+            - IPv4
+            - IPv6
+          proxy-real-ip-cidr: "127.0.0.1/32,10.42.4.0/8"
+          maxmindLicenseKey: "{{maxmindkey}}"
   - name: Deploy cert manager
     kubernetes.core.helm:
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.9.1
+      chart_version: v1.13.3
       create_namespace: true
+      wait: yes
       values:
         installCRDs: true
-  - name: Configure cert manager issuer
-    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/scalingpythonml/certificate-stuff/letsencrypt-issuer-production.yaml"
-  - name: Configure traefik-system ns
-    community.kubernetes.k8s:
-      kind: namespace
-      name: traefik-system
-      state: present
-  - name: Configure traefik-certs volume
+  - name: Create staging certificate issuer
     community.kubernetes.k8s:
       definition:
-        apiVersion: v1
-        kind: PersistentVolumeClaim
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
         metadata:
-          namespace: traefik-system
-          name: traefik-certs
+          name: letsencrypt-staging
+          namespace: cert-manager
         spec:
-          accessModes:
-          - ReadWriteMany
-          resources:
-            requests:
-              storage: 512m
-          storageClassName: longhorn
-      state: present
-  - name: Deploy trafeik
-    kubernetes.core.helm:
-      name: traefik
-      chart_ref: traefik/traefik
-      release_namespace: traefik-system
-      chart_version: v10.19.5
-      create_namespace: true
-      values:
+          acme:
+            # The ACME server URL
+            server: https://acme-staging-v02.api.letsencrypt.org/directory
+            # Email address used for ACME registration
+            email: holden@pigscanfly.ca
+            # Name of a secret used to store the ACME account private key
+            privateKeySecretRef:
+              name: letsencrypt-staging
+            # Enable the HTTP-01 challenge provider
+            solvers:
+              - http01:
+                  ingress:
+                    class: nginx
+  - name: Create prod certificate issuer
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: cert-manager.io/v1
+        kind: ClusterIssuer
+        metadata:
+          name: letsencrypt
+        spec:
+          acme:
+            # The ACME server URL
+            server: https://acme-v02.api.letsencrypt.org/directory
+            # Email address used for ACME registration
+            email: holden@pigscanfly.ca
+            # Name of a secret used to store the ACME account private key
+            privateKeySecretRef:
+              name: letsencrypt-prod
+            # Enable the HTTP-01 challenge provider
+            solvers:
+              - http01:
+                  ingress:
+                    class: nginx
+#  - name: Configure cert manager issuer
+#    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/scalingpythonml/certificate-stuff/letsencrypt-issuer-staging.yaml"
+#  - name: Configure traefik-system ns
+#    community.kubernetes.k8s:
+#      kind: namespace
+#      name: traefik-system
+#      state: present
+#  - name: Configure traefik-certs volume
+#    community.kubernetes.k8s:
+#      definition:
+#        apiVersion: v1
+#        kind: PersistentVolumeClaim
+#        metadata:
+#          namespace: traefik-system
+#          name: traefik-certs
+#        spec:
+#          accessModes:
+#          - ReadWriteMany
+#          resources:
+#            requests:
+#              storage: 512m
+#          storageClassName: longhorn
+#      state: present
+#  - name: Deploy trafeik
+#    kubernetes.core.helm:
+#      name: traefik
+#      chart_ref: traefik/traefik
+#      release_namespace: traefik-system
+#      chart_version: v10.24.0
+#      create_namespace: true
+#      values:
 # To configure how we want things to go
-        additionalArguments:
-          - "--log.level=INFO"
+#        additionalArguments:
+#          - "--log.level=DEBUG"
 #          - "--providers.kubernetesIngress.ingressClass=traefik-cert-manager"
-          - "--global.checknewversion"
-          - "--global.sendanonymoususage"
+#          - "--global.checknewversion"
+#          - "--global.sendanonymoususage"
 #          - "--entryPoints.traefik.address=:9000"
 #          - "--api.dashboard=true"
 #          - "--ping=true"
 # If we were to try and avoid cert-manager but it's being weird.
-          - "--certificatesresolvers.le.acme.storage=/data/acme.json"
-          - "--certificatesresolvers.le.acme.tlschallenge=true"
-          - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
-          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
+#          - "--certificatesresolvers.le.acme.storage=/data/acme.json"
+#          - "--certificatesresolvers.le.acme.tlschallenge=true"
+#          - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
+#          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
 #          - "--certificatesresolvers.le.acme.httpchallenge=true"
 #          - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
 #          - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
 #          - "--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
 #          - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
 #          - "--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-        persistence:
-          enable: true
-          accessMode: ReadWriteMany
-          existingClaim: "traefik-certs"
-          size: 512m
-          path: "/data"
-        ingressClass:
-          enabled: true
-          isDefaultClass: true
-        service:
-          spec:
-            loadBalancerIP: 23.177.16.200
-            externalTrafficPolicy: Local
+#        persistence:
+#          enable: true
+#          accessMode: ReadWriteMany
+#          existingClaim: "traefik-certs"
+#          size: 512m
+#          path: "/data"
+#        ingressClass:
+#          enabled: true
+#          isDefaultClass: true
+#        service:
+#          spec:
+#            loadBalancerIP: 23.177.16.200
+#            externalTrafficPolicy: Local
         # See https://community.traefik.io/t/traefik-v2-helm-v3-ingressroute-error-getting-validation-data-lets-encrypt/6262
         # (needed for traefik to work with letsencrypt and storing certs in /data)
-        podSecurityContext:
-          fsGroup: null
+#        podSecurityContext:
+#          fsGroup: null
+# traefik has been annoying me lately, lets try nginx for new bugs
 # longhorn gets sad in any NS other than longhorn-system :/
   - name: Deploy longhorn
     kubernetes.core.helm:
       name: longhorn
       chart_ref: longhorn/longhorn
       release_namespace: longhorn-system
+      chart_version: 1.4.0
       create_namespace: true
       values:
         defaultSettings:
           defaultDataPath: /storage
-# See https://rpi4cluster.com/k3s/k3s-storage-setting/
-  - name: Deploy minio (non operator)
-    kubernetes.core.helm:
-      name: minio
-      chart_ref: minio/minio
-      release_namespace: minio
-      wait_timeout: 30m
-      values:
-        image:
-          repository: quay.io/minio/minio
-          tag: RELEASE.2022-04-09T15-09-52Z
-          pullPolicy: IfNotPresent
-        mcImage:
-          repository: quay.io/minio/mc
-          tag: RELEASE.2022-04-07T21-43-27Z
-          pullPolicy: IfNotPresent
-        rootUser: "{{minio_root}}"
-        rootPassword: "{{minio_pw}}"
-        users:
-          - accessKey: "{{minio_holden_access}}"
-            secretKey: "{{minio_holden_secret}}"
-            policy: consoleAdmin
-          - accessKey: "{{minio_mika_access}}"
-            secretKey: "{{minio_mika_secret}}"
-            policy: consoleAdmin
-        persistence:
-          storageClass: local-path
-          size: 100Gi
-        buckets:
-          - name: holden
-            policy: none
-            purge: false
-          - name: mika
-            policy: none
-            purge: false
-          - name: public
-            policy: public
-            purge: false
-        mode: standalone
   - name: Create minio secret for Jupyter
     community.kubernetes.k8s:
       definition:
@@ -414,216 +537,6 @@
       api_version: rbac.authorization.k8s.io/v1
       kind: RoleBinding
       state: present
-  - name: Create a greenIOT ns
-    community.kubernetes.k8s:
-      name: greeniot
-      api_version: v1
-      kind: Namespace
-      state: present
-  - name: Create greenIOT DB secrets
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: v1
-        kind: ConfigMap
-
-        metadata:
-          name: dbconfig
-          namespace: greeniot
-        data:
-          config: |
-            [client]
-            port=3306
-            user=opengreeniot
-            password={{opengreeniot_db_pw}}
-            host=nani.pigscanfly.ca
-            database=opengreeniot
-      state: present
-  - name: Create greenIOT web secrets
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: v1
-        kind: Secret
-
-        metadata:
-          name: websecrets
-          namespace: greeniot
-
-        type: Opaque
-
-        stringData:
-          SECRET_KEY: "{{django_secret_key}}"
-          DEFAULT_FROM_EMAIL: "{{django_email_from_user}}"
-          EMAIL_HOST: "{{django_email_host}}"
-          EMAIL_HOST_USER: "{{django_email_host_user}}"
-          EMAIL_HOST_PASSWORD: "{{django_email_host_password}}"
-          STRIPE_SECRET_KEY: "{{django_stripe_secret_key}}"
-          STRIPE_PUBLISHABLE_KEY: "{{django_stripe_publishable_key}}"
-          STRIPE_PLAN_MONTHLY_ID: "{{django_stripe_plan_monthly_id}}"
-          STRIPE_PLAN_ANNUAL_ID: "{{django_stripe_plan_annual_id}}"
-          STRIPE_WEBHOOK_SIGNING_KEY: "{{django_stripe_webhook_signing_key}}"
-      state: present
-  - name: Create greenIOT web deployment backend
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: apps/v1
-        kind: Deployment
-        metadata:
-          name: web-backend
-          namespace: greeniot
-        spec:
-          selector:
-            matchLabels:
-              run: web-backend
-          replicas: 2
-          template:
-            metadata:
-              labels:
-                app: web-backend
-                run: web-backend
-            spec:
-              volumes:
-                - name: sql-config
-                  configMap:
-                    name: dbconfig
-              containers:
-              - name: server
-                image: holdenk/green-iot-web:latest
-                pullPolicy: Always
-                env:
-                  - name: SECRET_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: SECRET_KEY
-                  - name: DEFAULT_FROM_EMAIL
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: DEFAULT_FROM_EMAIL
-                  - name: EMAIL_HOST
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: EMAIL_HOST
-                  - name: EMAIL_HOST_USER
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: EMAIL_HOST_USER
-                  - name: EMAIL_HOST_PASSWORD
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: EMAIL_HOST_PASSWORD
-                  - name: STRIPE_SECRET_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: STRIPE_SECRET_KEY
-                  - name: STRIPE_PUBLISHABLE_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: STRIPE_PUBLISHABLE_KEY
-                  - name: STRIPE_PLAN_MONTHLY_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: STRIPE_PLAN_MONTHLY_ID
-                  - name: STRIPE_PLAN_ANNUAL_ID
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: STRIPE_PLAN_ANNUAL_ID
-                  - name: STRIPE_WEBHOOK_SIGNING_KEY
-                    valueFrom:
-                      secretKeyRef:
-                        name: websecrets
-                        key: STRIPE_WEBHOOK_SIGNING_KEY
-                ports:
-                - containerPort: 80
-                resources:
-                  limits:
-                    cpu: 5
-                    memory: 10G
-                  requests:
-                    cpu: 1
-                    memory: 1G
-                volumeMounts:
-                  - mountPath: "/opt/app/my.cnf"
-                    name: sql-config
-                    readOnly: true
-                    subPath: config
-      state: present
-  - name: Create greenIOT LB service
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: v1
-        kind: Service
-        metadata:
-          name: iot-web-service
-          namespace: greeniot
-        spec:
-          selector:
-            app: web-backend
-          type: ClusterIP
-          ports:
-          - name: http
-            port: 80
-            targetPort: 80
-            protocol: TCP
-  - name: Create longhorn auth middleware
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: traefik.containo.us/v1alpha1
-        kind: Middleware
-        metadata:
-          name: lhauth
-          namespace: longhorn-system
-        spec:
-          basicAuth:
-            secret: basic-auth
-  - name: Create longhorn auth middleware
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: traefik.containo.us/v1alpha1
-        kind: Middleware
-        metadata:
-          name: svc-longhorn-headers
-          namespace: longhorn-system
-        spec:
-          headers:
-            customRequestHeaders:
-              X-Forwarded-Proto: "https"
-  - name: minio middleware
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: traefik.containo.us/v1alpha1
-        kind: Middleware
-        metadata:
-          name: minio-middle
-          namespace: minio
-        spec:
-          headers:
-            hostsProxyHeaders:
-              - x-forwarded-for
-              - x-forwarded-host
-              - x-real-ip
-              - host
-            sslProxyHeaders:
-              X-Forwarded-Proto: "https"
-  - name: Force https
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: traefik.containo.us/v1alpha1
-        kind: Middleware
-        metadata:
-          name: https-plz
-          namespace: default
-        spec:
-          redirectScheme:
-            scheme: https
-            permanent: true
   - name: Create longhorn Ingress https
     community.kubernetes.k8s:
       definition:
@@ -633,18 +546,25 @@
           name: longhorn-ingress
           namespace: longhorn-system
           annotations:
-            traefik.ingress.kubernetes.io/router.entrypoints: websecure
-            traefik.ingress.kubernetes.io/router.tls.certresolver: le
-            traefik.ingress.kubernetes.io/router.tls: "true"       
-            traefik.ingress.kubernetes.io/router.middlewares: longhorn-system-svc-longhorn-headers@kubernetescrd
-            traefik.ingress.kubernetes.io/router.middlewares: default-https-plz@kubernetescrd
-            kubernetes.io/ingress.class: traefik
-            # type of authentication
-            traefik.ingress.kubernetes.io/router.middlewares: longhorn-system-lhauth@kubernetescrd
+            # nginx
+            nginx.ingress.kubernetes.io/auth-type: basic
+            nginx.ingress.kubernetes.io/auth-secret: basic-auth
+            cert-manager.io/cluster-issuer: letsencrypt
+            cert-manager.io/issue-temporary-certificate: "true"
+            acme.cert-manager.io/http01-edit-in-place: "true"
+            nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+            nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required '
+            nginx.ingress.kubernetes.io/configuration-snippet: |
+              proxy_set_header "Host" "$host";
+              real_ip_header X-Forwarded-For;
+              proxy_set_header  "X-Forwarded-For" "$proxy_add_x_forwarded_for";
+              real_ip_recursive on;
         spec:
+          ingressClassName: nginx
           tls:
           - hosts:
               - longhorn.pigscanfly.ca
+            secretName: longhorn-tls-secret
           rules:
             - host: "longhorn.pigscanfly.ca"
               http:
@@ -665,16 +585,22 @@
           name: minio-ingress
           namespace: minio
           annotations:
+            # traefik (aka sad times)
             traefik.ingress.kubernetes.io/router.entrypoints: websecure
             traefik.ingress.kubernetes.io/router.middlewares: default-https-plz@kubernetescrd
             traefik.ingress.kubernetes.io/router.middlewares: minio-minio-middle@kubernetescrd
             traefik.ingress.kubernetes.io/router.tls: "true"
             traefik.ingress.kubernetes.io/router.tls.certresolver: le
-            kubernetes.io/ingress.class: traefik
+            # nginx
+            cert-manager.io/cluster-issuer: letsencrypt
+            cert-manager.io/issue-temporary-certificate: "true"
+            acme.cert-manager.io/http01-edit-in-place: "true"
         spec:
+          ingressClassName: nginx
           tls:
           - hosts:
               - minio.pigscanfly.ca
+            secretName: minio-tls-secret
           rules:
             - host: "minio.pigscanfly.ca"
               http:
@@ -686,27 +612,42 @@
                       name: minio-console
                       port:
                         number: 9001
-  - name: Create minio Ingress http
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: minio-rdr-ingress
-          namespace: minio
-          annotations:
-            traefik.ingress.kubernetes.io/router.entrypoints: web
-            traefik.ingress.kubernetes.io/router.middlewares: default-https-plz@kubernetescrd
-            kubernetes.io/ingress.class: traefik
-        spec:
-          rules:
-            - host: "minio.pigscanfly.ca"
-              http:
-                paths:
-                - pathType: Prefix
-                  path: "/"
-                  backend:
-                    service:
-                      name: minio
-                      port:
-                        number: 9000
+# See https://rpi4cluster.com/k3s/k3s-storage-setting/
+  - name: Deploy minio (non operator)
+    kubernetes.core.helm:
+      name: minio
+      chart_ref: minio/minio
+      release_namespace: minio
+      wait_timeout: 30m
+      values:
+        image:
+          repository: quay.io/minio/minio
+          tag: RELEASE.2022-04-09T15-09-52Z
+          pullPolicy: IfNotPresent
+        mcImage:
+          repository: quay.io/minio/mc
+          tag: RELEASE.2022-04-07T21-43-27Z
+          pullPolicy: IfNotPresent
+        rootUser: "{{minio_root}}"
+        rootPassword: "{{minio_pw}}"
+        users:
+          - accessKey: "{{minio_holden_access}}"
+            secretKey: "{{minio_holden_secret}}"
+            policy: consoleAdmin
+          - accessKey: "{{minio_mika_access}}"
+            secretKey: "{{minio_mika_secret}}"
+            policy: consoleAdmin
+        persistence:
+          storageClass: local-path
+          size: 10Gi
+        buckets:
+          - name: holden
+            policy: none
+            purge: false
+          - name: mika
+            policy: none
+            purge: false
+          - name: public
+            policy: public
+            purge: false
+        mode: standalone

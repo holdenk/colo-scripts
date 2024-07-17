@@ -1,0 +1,19 @@
+---
+- hosts: all
+  tasks:
+  - name: Update all host/vm packages
+    ansible.builtin.apt:
+            update_cache: true
+            cache_valid_time: 3600
+            name: "*"
+            state: latest
+    become: true
+- hosts: all
+  become: true
+  serial: 1
+  roles:
+  - role: GROG.reboot
+    reboot_connect_timeout: 120
+    reboot_interval: yes
+    reboot_interval_seconds: 480
+    reboot_wait_timeout: 900

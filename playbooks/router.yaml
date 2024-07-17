@@ -98,6 +98,9 @@
         DefaultOnlyV6:
           40 deny:
             prefix: any
+        MetallbV6:
+          10 permit:
+            prefix: any
       frr_bgp:
         asns:
           399306:

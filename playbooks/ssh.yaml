@@ -47,6 +47,12 @@
       flat: yes
     become: yes
 
+  - name: Fetch the keyfile from the node to master
+    fetch: 
+      src: "~/.ssh/id_rsa.pub"
+      dest: "buffer/{{ansible_hostname}}-id_rsa_magic.pub"
+      flat: yes
+
   - name: Copy the key add to authorized_keys using Ansible module
     authorized_key:
       user: root
@@ -55,11 +61,13 @@
     with_items: 
       - "{{ groups['kubernetes'] }}"
     become: yes
-  # Root password login (ugh) cloud.net req
-  - name: Set root pw
-    ansible.builtin.user:
-      name: root
-      password: "{{ root_pw | password_hash('sha512') }}"
+  - name: Copy the key add to authorized_keys using Ansible module
+    authorized_key:
+      user: root
+      state: present
+      key: "{{ lookup('file','buffer/{{item}}-id_rsa_magic.pub')}}"
+    with_items: 
+      - "{{ groups['kubernetes'] }}"
     become: yes
   - name: Make sure group wheel is not in the sudoers configuration
     ansible.builtin.lineinfile:
@@ -73,17 +81,13 @@
       state: absent
       regexp: '^PasswordAuthentication no'
     become: yes
-  - name: Change ssh config
-    ansible.builtin.lineinfile:
-      path: /etc/ssh/sshd_config
-      line: "PasswordAuthentication yes"
-    become: yes
+#  - name: Change ssh config
+#    ansible.builtin.lineinfile:
+#      path: /etc/ssh/sshd_config
+#      line: "PasswordAuthentication yes"
+#    become: yes
   - name: Change ssh config
     ansible.builtin.lineinfile:
       path: /etc/ssh/sshd_config
       line: "PermitRootLogin yes"
     become: yes
-  - name: Restart ssh
-    ansible.builtin.shell: "systemctl restart sshd"
-    become: yes
-

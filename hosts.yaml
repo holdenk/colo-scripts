@@ -1,8 +1,17 @@
 all:
   children:
-    router:
+    cdn:
       hosts:
-        ohana
+        jumba:
+        nani:
+        turo:
+        experiment221:
+#    router:
+#      hosts:
+#        ohana
+    route-server:
+      hosts:
+        turo
     rpki:
     dns:
       children:
@@ -23,11 +32,11 @@ all:
               repmgr_priority: 300
         db-followers:
           hosts:
-            david:
-              server_id: 2
-              data_dir: "/db/"
-              bind_address: 127.0.0.1
-              repmgr_priority: 200
+#            david:
+#              server_id: 2
+#              data_dir: "/db/"
+#              bind_address: 127.0.0.1
+#              repmgr_priority: 200
             jumba:
               server_id: 3
               data_dir: "/primary/db"
@@ -40,34 +49,42 @@ all:
       children:
         kube-leader:
           hosts:
-            nano-4gb
+            jumba
         leader-backup:
           hosts:
         workers:
           children:
             pis:
               hosts:
-                k8s-leader:
+                k8s-worker-101:
                   ansible_user: root
-#                k8s-worker-100:
+                k8s-worker-100:
+                  ansible_user: root
+#                k8s-worker-102:
 #                  ansible_user: root
-                k8s-worker-102:
-                  ansible_user: root
+#                k8s-worker-jetson-nano:
+#                  ansible_user: root
             docker-hosts:
               children:
                 gpus:
-                  hosts:
-                    k8s-worker-nv1:
-                    k8s-worker-nv2:
-                    k8s-worker-nv3:
+                  children:
+                    arm-gpus:
+                      hosts:
+                        k8s-worker-nv1:
+                          k8s-worker-nv2:
+                            k8s-worker-nv3:
+                    x86-gpus:
+                      hosts:
+                        plushy:
                 amd-gpus:
                   hosts:
                     experiment221:
                 x86:
                   hosts:
-                    experiment626:
+#                    experiment626:
                     experiment624:
                     bubbles:
-                    experiment625:
-                    jumba:
+#                    experiment623:
+                    turo:
+#                    experiment625:
 localhost:
