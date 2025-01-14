@@ -230,7 +230,7 @@
       host: "%"
       priv: "spacebeaver%.*:ALL"
       login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create opengreeniotuser
+  - name: Create fuckhealthinsurance
     community.mysql.mysql_user:
       state: present
       name: fuckhealthinsurance
@@ -238,6 +238,15 @@
       host: "%"
       priv: "fuckhealthinsurance%.*:ALL"
       login_unix_socket: /var/run/mysqld/mysqld.sock
+  - name: Create fuckhealthinsurance
+    community.mysql.mysql_user:
+      state: present
+      name: marcus
+      password: "{{MARCUS_PW}}"
+      host: "%"
+      priv: "fuckhealthinsurance%.*:SELECT"
+      login_unix_socket: /var/run/mysqld/mysqld.sock
+      login_host: 100.80.134.19
   - name: Create iceberg user
     community.mysql.mysql_user:
       state: present

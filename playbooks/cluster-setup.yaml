@@ -152,6 +152,18 @@
           ENVIRONMENT: "production"
           SSL: "on"
       state: present
+  - name: Create totallylegitco primary secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: fight-health-insurance-primary-secret
+          namespace: totallylegitco
+        stringData:
+          FIGHT_HEALTH_ADMIN_USER: "{{FIGHT_HEALTH_ADMIN_USER}}"
+          FIGHT_HEALTH_ADMIN_PASSWORD: "{{FIGHT_HEALTH_ADMIN_PASSWORD}}"
+      state: present
   - name: Create totallylegitco secrets
     community.kubernetes.k8s:
       definition:
@@ -175,6 +187,9 @@
           DBHOST: "nani.pigscanfly.ca"
           __ENV__: "Runtime"
           ENVIRONMENT: "Prod"
+          DJANGO_SETTINGS_MODULE: "fighthealthinsurance.settings"
+          SENTRY_ENDPOINT: "{{SENTRY_ENDPOINT}}"
+          FAXYMCFAXFACE_HOST: "100.123.153.34"
           SSL: "on"
           OPENAI_API_BASE: "https://api.endpoints.anyscale.com/v1"
           OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
@@ -183,9 +198,50 @@
           HEALTH_BACKEND_HOST: "{{HEALTH_BACKEND_HOST}}"
           HEALTH_BACKEND_PORT: "{{HEALTH_BACKEND_PORT}}"
           HEALTH_BACKEND_MODEL: "{{HEALTH_BACKEND_MODEL}}"
+          HEALTH_BACKUP_BACKEND_HOST: "{{HEALTH_BACKUP_BACKEND_HOST}}"
+          HEALTH_BACKUP_BACKEND_PORT: "{{HEALTH_BACKUP_BACKEND_PORT}}"
+          HEALTH_BACKUP_BACKEND_MODEL: "{{HEALTH_BACKUP_BACKEND_MODEL}}"
           TOGETHER_KEY: "{{TOGETHER_KEY}}"
           PERPLEXITY_API: "{{PERPLEXITY_API}}"
+          OCTOAI_TOKEN: "{{OCTOAI_TOKEN}}"
+          EMAIL_HOST_USER: "{{HEALTH_EMAIL_HOST_USER}}"
+          EMAIL_HOST_PASSWORD: "{{HEALTH_EMAIL_HOST_PASSWORD}}"
+          EX_MINIO_ACCESS: "{{EX_MINIO_ACCESS}}"
+          EX_MINIO_SECRET: "{{EX_MINIO_SECRET}}"
+          EX_MINIO_BUCKET: "{{EX_MINIO_BUCKET_ALT}}"
+          EX_MINIO_REGION: "{{EX_MINIO_REGION}}"
+          EX_MINIO_HOST: "{{EX_MINIO_HOST}}"
+          EX_MINIO_HOST_ENDPOINT: "{{EX_MINIO_HOST}}:9000"
+          EX_MINIO_USE_HTTPS: "{{EX_MINIO_HTTPS}}"
+          EX_MINIO_CERT_CHECK: "{{EX_MINIO_CERT_CHECK}}"
+          DEEPINFRA_API: "{{DEEPINFRA_TOKEN}}"
+          RAY_ADDRESS: "ray://raycluster-kuberay-head-svc.totallylegitco.svc:10001"
+          NBC_API_KEY: "{{NBC_API_KEY}}"
+          NBCI_API_KEY: "{{NBC_API_KEY}}"
+          NCBI_API_KEY: "{{NBC_API_KEY}}"
+          DJANGO_CONFIGURATION: "Prod"
+          SONIC_USERNAME: "{{SONIC_USERNAME}}"
+          SONIC_TOKEN: "{{SONIC_TOKEN}}"
+          SONIC_PASSWORD: "{{SONIC_PASSWORD}}"
       state: present
+#  - name: Deploy Ray Cluster
+#    kubernetes.core.helm:
+#      name: raycluster
+#      namespace: totallylegitco
+#      chart_ref: kuberay/ray-cluster
+#      chart_version: 1.2.2
+#      values:
+#        image:
+#          repo: holdenk/ray
+#          tag: 2.38.0
+#        head:
+#          envFrom:
+#            - secretRef:
+#              name: fight-health-insurance-secret
+#        worker:
+#          envFrom:
+#            - secretRef:
+#              name: fight-health-insurance-secret
   - name: Create spacebeaver Ray secrets
     community.kubernetes.k8s:
       definition:
@@ -220,6 +276,10 @@
 #    args:
 #      creates: /usr/local/bin/helm
 #    become: true
+  - name: Add opensearch-operator
+    kubernetes.core.helm_repository:
+      name: opensearch-operator
+      repo_url: "https://opensearch-project.github.io/opensearch-k8s-operator/"
   - name: Add bitnami chart
     kubernetes.core.helm_repository:
       name: bitnami
@@ -252,12 +312,21 @@
     kubernetes.core.helm_repository:
       name: longhorn
       repo_url: "https://charts.longhorn.io"
+  - name: Add ray chart
+    kubernetes.core.helm_repository:
+      name: kuberay
+      repo_url: https://ray-project.github.io/kuberay-helm/
   - name: Add cert-manager chart
     kubernetes.core.helm_repository:
       name: jetstack
       repo_url: "https://charts.jetstack.io"
   - name: Install metallb
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.13.12/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.18/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
+#  - name: Deploy ray
+#    kubernetes.core.helm:
+#      name: kuberay-operator
+#      chart_ref: kuberay/kuberay-operator
+#      chart_version: 1.2.2
   - name: Deploy nginx
     kubernetes.core.helm:
       name: ingress-nginx
@@ -407,11 +476,12 @@
       name: longhorn
       chart_ref: longhorn/longhorn
       release_namespace: longhorn-system
-      chart_version: 1.4.0
+      chart_version: 1.7.1
       create_namespace: true
       values:
         defaultSettings:
           defaultDataPath: /storage
+          createDefaultDiskLabeledNodes: true
   - name: Create minio secret for Jupyter
     community.kubernetes.k8s:
       definition:
@@ -549,22 +619,22 @@
             # nginx
             nginx.ingress.kubernetes.io/auth-type: basic
             nginx.ingress.kubernetes.io/auth-secret: basic-auth
-            cert-manager.io/cluster-issuer: letsencrypt
-            cert-manager.io/issue-temporary-certificate: "true"
-            acme.cert-manager.io/http01-edit-in-place: "true"
-            nginx.ingress.kubernetes.io/ssl-redirect: 'false'
+#            cert-manager.io/cluster-issuer: letsencrypt
+#            cert-manager.io/issue-temporary-certificate: "true"
+#            acme.cert-manager.io/http01-edit-in-place: "true"
             nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required '
-            nginx.ingress.kubernetes.io/configuration-snippet: |
-              proxy_set_header "Host" "$host";
-              real_ip_header X-Forwarded-For;
-              proxy_set_header  "X-Forwarded-For" "$proxy_add_x_forwarded_for";
-              real_ip_recursive on;
+            nginx.ingress.kubernetes.io/proxy-body-size: 10000m
+#            nginx.ingress.kubernetes.io/configuration-snippet: |
+#              proxy_set_header "Host" "$host";
+#              real_ip_header X-Forwarded-For;
+#              proxy_set_header  "X-Forwarded-For" "$proxy_add_x_forwarded_for";
+#              real_ip_recursive on;
         spec:
           ingressClassName: nginx
-          tls:
-          - hosts:
-              - longhorn.pigscanfly.ca
-            secretName: longhorn-tls-secret
+#          tls:
+#          - hosts:
+#              - longhorn.pigscanfly.ca
+#            secretName: longhorn-tls-secret
           rules:
             - host: "longhorn.pigscanfly.ca"
               http:
@@ -576,78 +646,42 @@
                       name: longhorn-frontend
                       port:
                         number: 80
-  - name: Create minio Ingress https
-    community.kubernetes.k8s:
-      definition:
-        apiVersion: networking.k8s.io/v1
-        kind: Ingress
-        metadata:
-          name: minio-ingress
-          namespace: minio
-          annotations:
-            # traefik (aka sad times)
-            traefik.ingress.kubernetes.io/router.entrypoints: websecure
-            traefik.ingress.kubernetes.io/router.middlewares: default-https-plz@kubernetescrd
-            traefik.ingress.kubernetes.io/router.middlewares: minio-minio-middle@kubernetescrd
-            traefik.ingress.kubernetes.io/router.tls: "true"
-            traefik.ingress.kubernetes.io/router.tls.certresolver: le
-            # nginx
-            cert-manager.io/cluster-issuer: letsencrypt
-            cert-manager.io/issue-temporary-certificate: "true"
-            acme.cert-manager.io/http01-edit-in-place: "true"
-        spec:
-          ingressClassName: nginx
-          tls:
-          - hosts:
-              - minio.pigscanfly.ca
-            secretName: minio-tls-secret
-          rules:
-            - host: "minio.pigscanfly.ca"
-              http:
-                paths:
-                - pathType: Prefix
-                  path: "/"
-                  backend:
-                    service:
-                      name: minio-console
-                      port:
-                        number: 9001
-# See https://rpi4cluster.com/k3s/k3s-storage-setting/
-  - name: Deploy minio (non operator)
+  - name: Deploy opensearch operator
     kubernetes.core.helm:
-      name: minio
-      chart_ref: minio/minio
-      release_namespace: minio
-      wait_timeout: 30m
-      values:
-        image:
-          repository: quay.io/minio/minio
-          tag: RELEASE.2022-04-09T15-09-52Z
-          pullPolicy: IfNotPresent
-        mcImage:
-          repository: quay.io/minio/mc
-          tag: RELEASE.2022-04-07T21-43-27Z
-          pullPolicy: IfNotPresent
-        rootUser: "{{minio_root}}"
-        rootPassword: "{{minio_pw}}"
-        users:
-          - accessKey: "{{minio_holden_access}}"
-            secretKey: "{{minio_holden_secret}}"
-            policy: consoleAdmin
-          - accessKey: "{{minio_mika_access}}"
-            secretKey: "{{minio_mika_secret}}"
-            policy: consoleAdmin
-        persistence:
-          storageClass: local-path
-          size: 10Gi
-        buckets:
-          - name: holden
-            policy: none
-            purge: false
-          - name: mika
-            policy: none
-            purge: false
-          - name: public
-            policy: public
-            purge: false
-        mode: standalone
+      name: opensearch-operator
+      chart_ref: opensearch-operator/opensearch-operator
+      release_namespace: opensearch
+      create_namespace: true
+# See https://rpi4cluster.com/k3s/k3s-storage-setting/
+#  - name: Deploy minio operator
+#    kubernetes.core.helm:
+#      name: minio
+#      chart_ref: minio-operator/operator
+#      release_namespace: minio-operator
+#      wait_timeout: 30m
+#  - name: Deploy minio tenant
+#    kubernetes.core.helm:
+#      name: minio
+#      chart_ref: minio-operator/tenant
+#      release_namespace: minio-operator
+#      wait_timeout: 30m
+#      values:
+#        tenant:
+#          servers: 3
+#          rootUser: "{{minio_root}}"
+#          rootPassword: "{{minio_pw}}"
+#          users:
+#            - accessKey: "{{minio_holden_access}}"
+#              secretKey: "{{minio_holden_secret}}"
+#              policy: consoleAdmin
+#          persistence:
+#            storageClass: local-path
+#            size: 20Gi
+#          buckets:
+#            - name: holden
+#              policy: none
+#              purge: false
+#            - name: fhi
+#              policy: none
+#              purge: false
+          

@@ -23,6 +23,7 @@
         - htop
         - iputils-arping
         - fail2ban
+        - nfs-common
       state: latest
       update_cache: true
     become: true
