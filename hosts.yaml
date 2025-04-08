@@ -47,14 +47,18 @@ all:
         jumba
     kubernetes:
       children:
-        kube-leader:
-          hosts:
-            jumba
-        leader-backup:
-          hosts:
-            nani:
-            experiment624:
-            majesty:
+        kube-leader-and-backups:
+          children:
+            kube-leader:
+              hosts:
+                turo:
+            leader-backup:
+              hosts:
+#                nani:
+#                experiment624:
+#                majesty:
+                experiment624:
+                plushy:
         workers:
           children:
             pis:
@@ -75,7 +79,7 @@ all:
                       hosts:
                         k8s-worker-nv1:
 #                        k8s-worker-nv2:
-#                        k8s-worker-nv3:
+                        k8s-worker-nv3:
                     x86-gpus:
                       hosts:
                         plushy:

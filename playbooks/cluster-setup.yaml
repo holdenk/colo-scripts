@@ -7,6 +7,12 @@
       api_version: v1
       kind: Namespace
       state: present
+  - name: Create a tlc namespace
+    community.kubernetes.k8s:
+      name: totallylegitco
+      api_version: v1
+      kind: Namespace
+      state: present
   - name: Create a cacti ns
     community.kubernetes.k8s:
       name: cacti
@@ -38,7 +44,7 @@
       kind: Namespace
       state: present
   - name: Create longhorn secret
-    ansible.builtin.shell: "(echo holden:$(openssl passwd -stdin -apr1 <<< {{longhorn_pw}}) >> auth); kubectl get secret -n longhorn-system basic-auth || kubectl -n longhorn-system create secret generic basic-auth --from-file=auth"
+    ansible.builtin.shell: "(kubectl get ns longhorn-system || kubectl create ns longhorn-system);(echo holden:$(openssl passwd -stdin -apr1 <<< {{longhorn_pw}}) >> auth); kubectl get secret -n longhorn-system basic-auth || kubectl -n longhorn-system create secret generic basic-auth --from-file=auth"
     args:
       executable: /bin/bash
   - name: Create a minio ns
@@ -164,6 +170,56 @@
           FIGHT_HEALTH_ADMIN_USER: "{{FIGHT_HEALTH_ADMIN_USER}}"
           FIGHT_HEALTH_ADMIN_PASSWORD: "{{FIGHT_HEALTH_ADMIN_PASSWORD}}"
       state: present
+  - name: Create totallylegitco superuser-pg-secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        type: kubernetes.io/basic-auth
+        metadata:
+          name: fhi-superuser-pg-secret
+          namespace: totallylegitco
+        stringData:
+          username: "{{FIGHT_HEALTH_PG_ADMIN_USER}}"
+          password: "{{FIGHT_HEALTH_PG_ADMIN_PASSWORD}}"
+      state: present
+  - name: Create totallylegitco fhi-pg-secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        type: kubernetes.io/basic-auth
+        metadata:
+          name: fhi-internal-pg-secret
+          namespace: totallylegitco
+        stringData:
+          username: "{{FIGHT_HEALTH_PG_USER}}"
+          password: "{{FIGHT_HEALTH_PG_PASSWORD}}"
+      state: present
+  - name: Create totallylegitco PG_ACCESS_KEY_ID
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: pg-backup
+          namespace: totallylegitco
+        stringData:
+          PG_ACCESS_KEY_ID: "{{PG_B2_ACCESS_KEY_ID}}"
+          PG_ACCESS_SECRET_KEY: "{{PG_B2_SECRET_KEY}}"
+      state: present
+  - name: Create totallylegitco PG_ACCESS_KEY_ID
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: pg-backup2
+          namespace: totallylegitco
+        stringData:
+          PG_ACCESS_KEY_ID: "{{PG_B2_ACCESS_KEY_ID2}}"
+          PG_ACCESS_SECRET_KEY: "{{PG_B2_SECRET_KEY2}}"
+      state: present
   - name: Create totallylegitco secrets
     community.kubernetes.k8s:
       definition:
@@ -173,10 +229,15 @@
           name: fight-health-insurance-secret
           namespace: totallylegitco
         stringData:
+          PDBUSER: "{{FIGHT_HEALTH_PG_USER}}"
+          PDBPASSWORD: "{{FIGHT_HEALTH_PG_PASSWORD}}"
+          PDBNAME: "app"
+          PDBHOST: "fhi-pg-second-rw.totallylegitco.svc"
           STRIPE_LIVE_SECRET_KEY: "{{FUCK_STRIPE_LIVE_SECRET_KEY}}"
           STRIPE_LIVE_PUBLIC_KEY: "{{FUCK_STRIPE_LIVE_PUBLIC_KEY}}"
           STRIPE_TEST_SECRET_KEY: "{{FUCK_STRIPE_TEST_SECRET_KEY}}"
           STRIPE_TEST_PUBLIC_KEY: "{{FUCK_STRIPE_TEST_PUBLIC_KEY}}"
+          STRIPE_WEBHOOK_SECRET: "{{TLC_SWS}}"
           DJSTRIPE_WEBHOOK_SECRET: "{{FUCK_DJSTRIPE_WEBHOOK_SECRET}}"
           RECAPTCHA_PUBLIC_KEY: "{{FUCK_RECAPTCHA_PUBLIC_KEY}}"
           RECAPTCHA_PRIVATE_KEY: "{{FUCK_RECAPTCHA_PRIVATE_KEY}}"
@@ -204,6 +265,8 @@
           TOGETHER_KEY: "{{TOGETHER_KEY}}"
           PERPLEXITY_API: "{{PERPLEXITY_API}}"
           OCTOAI_TOKEN: "{{OCTOAI_TOKEN}}"
+          EMAIL_HOST: "smtp.sendgrid.net"
+          EMAIL_HOST_PORT: "465"
           EMAIL_HOST_USER: "{{HEALTH_EMAIL_HOST_USER}}"
           EMAIL_HOST_PASSWORD: "{{HEALTH_EMAIL_HOST_PASSWORD}}"
           EX_MINIO_ACCESS: "{{EX_MINIO_ACCESS}}"
@@ -223,6 +286,28 @@
           SONIC_USERNAME: "{{SONIC_USERNAME}}"
           SONIC_TOKEN: "{{SONIC_TOKEN}}"
           SONIC_PASSWORD: "{{SONIC_PASSWORD}}"
+      state: present
+  - name: Create dev FHI secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: fight-health-insurance-secret-dev
+          namespace: totallylegitco
+        stringData:
+          ENVIRONMENT: "Dev"
+          DJANGO_SETTINGS_MODULE: "fighthealthinsurance.settings"
+          SSL: "on"
+          HEALTH_BACKEND_HOST: "{{HEALTH_BACKEND_HOST}}"
+          HEALTH_BACKEND_PORT: "{{HEALTH_BACKEND_PORT}}"
+          HEALTH_BACKEND_MODEL: "{{HEALTH_BACKEND_MODEL}}"
+          HEALTH_BACKUP_BACKEND_HOST: "{{HEALTH_BACKUP_BACKEND_HOST}}"
+          HEALTH_BACKUP_BACKEND_PORT: "{{HEALTH_BACKUP_BACKEND_PORT}}"
+          HEALTH_BACKUP_BACKEND_MODEL: "{{HEALTH_BACKUP_BACKEND_MODEL}}"
+          DJANGO_CONFIGURATION: "Dev"
+          FIGHT_HEALTH_ADMIN_USER: "{{FIGHT_HEALTH_ADMIN_USER_DEV}}"
+          FIGHT_HEALTH_ADMIN_PASSWORD: "{{FIGHT_HEALTH_ADMIN_USER_DEV}}"
       state: present
 #  - name: Deploy Ray Cluster
 #    kubernetes.core.helm:
@@ -276,10 +361,18 @@
 #    args:
 #      creates: /usr/local/bin/helm
 #    become: true
+  - name: Add gpu operator
+    kubernetes.core.helm_repository:
+      name: nvidia
+      repo_url: "https://helm.ngc.nvidia.com/nvidia"
   - name: Add opensearch-operator
     kubernetes.core.helm_repository:
       name: opensearch-operator
       repo_url: "https://opensearch-project.github.io/opensearch-k8s-operator/"
+  - name: Add cnpg
+    kubernetes.core.helm_repository:
+      name: cnpg
+      repo_url: "https://cloudnative-pg.github.io/charts"
   - name: Add bitnami chart
     kubernetes.core.helm_repository:
       name: bitnami
@@ -321,12 +414,18 @@
       name: jetstack
       repo_url: "https://charts.jetstack.io"
   - name: Install metallb
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.18/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
+    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
 #  - name: Deploy ray
 #    kubernetes.core.helm:
 #      name: kuberay-operator
 #      chart_ref: kuberay/kuberay-operator
 #      chart_version: 1.2.2
+  - name: Deplot cloud native postgres
+    kubernetes.core.helm:
+      name: cnpg
+      chart_ref: cnpg/cloudnative-pg
+      release_namespace: cnpg-system
+      create_namespace: true
   - name: Deploy nginx
     kubernetes.core.helm:
       name: ingress-nginx
@@ -353,7 +452,7 @@
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.13.3
+      chart_version: v1.17.0
       create_namespace: true
       wait: yes
       values:
@@ -476,11 +575,11 @@
       name: longhorn
       chart_ref: longhorn/longhorn
       release_namespace: longhorn-system
-      chart_version: 1.7.1
+      chart_version: 1.8.1
       create_namespace: true
       values:
         defaultSettings:
-          defaultDataPath: /storage
+          defaultDataPath: /db/encrypted/magic8
           createDefaultDiskLabeledNodes: true
   - name: Create minio secret for Jupyter
     community.kubernetes.k8s:

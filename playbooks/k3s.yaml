@@ -29,11 +29,43 @@
         - open-iscsi
         - jq
         - ntp
+        - ecryptfs-utils
     become: yes
   - name: Remove the thing to disable lxc rp_filter
     ansible.builtin.file:
       state: absent
       path: /etc/sysctl.d/90-override.conf
+    become: true
+  - name: Create the encrypted storage area
+    ansible.builtin.file:
+      state: directory
+      path: /db/encrypted
+      owner: root
+      group: root
+      mode: '0700'
+    become: true
+  - name: Create the encrypted DB directory
+    ansible.builtin.file:
+      state: directory
+      path: /db/encrypted-backing
+      owner: root
+      group: root
+      mode: '0700'
+    become: true
+  - name: Save the generated passphrase to /pw
+    ansible.builtin.copy:
+      content: "{{ DB_ENC_PW }}"
+      dest: /pw
+      owner: root
+      group: root
+      mode: '0600'
+    become: true
+  - name: Ensure ecryptfs entry is in /etc/fstab
+    ansible.builtin.lineinfile:
+      path: /etc/fstab
+      line: "/db/encrypted-backing /db/encrypted ecryptfs key=passphrase,noauto,ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_passthrough=n,ecryptfs_enable_filename_crypto=n 0 0"
+      state: present
+      regexp: "^/db/encrypted\\s+/db/encrypted\\s+ecryptfs\\s+.*"
     become: true
   - name: Restart sysctl
     ansible.builtin.shell: "systemctl restart systemd-sysctl"
@@ -84,14 +116,15 @@ defaults {
         - docker-ce-cli
     become: yes
   - name: Install k3s leader
-    ansible.builtin.shell: "k3sup install --k3s-version v1.29.9+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq' --cluster-init"
-#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.9+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
+    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq' --cluster"
+#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
-  - name: Check that k3s node has come up
-    ansible.builtin.shell: "kubectl get nodes || (sleep 360 && kubectl get nodes) || (sleep 360 && kubectl get nodes)"
-    become: true
+#  - name: Check that k3s node has come up
+#    ansible.builtin.shell: "kubectl get nodes || (sleep 360 && kubectl get nodes) || (sleep 360 && kubectl get nodes)"
+#    become: true
+
 #  - name: Make custom config.toml.tmpl file since config.toml is overwritten automatically.
 #    copy:
 #      remote_src: yes
@@ -133,8 +166,8 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
         - docker-ce-cli
     become: yes
   - name: Install k3s backups
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.9+k3s1 --host $(hostname).pigscanfly.ca --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq --node-label svccontroller.k3s.cattle.io/enablelb=true' --server-host jumba.pigscanfly.ca --server"
-#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.9+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq --node-label svccontroller.k3s.cattle.io/enablelb=true' --server-host turo.pigscanfly.ca --server || (sleep 10 && k3sup join --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq --node-label svccontroller.k3s.cattle.io/enablelb=true' --server-host turo.pigscanfly.ca --server)"
+#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
@@ -156,7 +189,7 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
       pkg:
         - linux-modules-extra-raspi
   - name: Install k3s workers on PIs with containerd & storage role
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.9+k3s1 --server-host jumba.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -187,9 +220,9 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
         - nvidia-container-toolkit
     become: yes
   - name: Install k3s workers with gpus
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.9+k3s1 --server-host jumba.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/gpu=gpu' "
+    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/gpu=gpu' "
     args:
-      creates: /usr/local/bin/k3s-agent-uninstall.sh
+      creates: /usr/local/bin/k3s
     become: true
   - name: Make custom config.toml.tmpl file since config.toml is overwritten automatically.
     copy:
@@ -226,12 +259,12 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 #      unsafe_writes: true
 #    become: true
   - name: Restart k3s workers to pickup new config
-    ansible.builtin.shell: "systemctl restart k3s-agent"
+    ansible.builtin.shell: "systemctl restart k3s-agent || systemctl restart k3s"
     become: true
 - hosts: amd-gpus
   tasks:
   - name: Install on AMD GPU hosts
-    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version v1.29.9+k3s1 --server-host jumba.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
+    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -278,8 +311,24 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 - hosts: x86
   tasks:
   - name: Install k3s workers on vanilla x86 nodes
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.9+k3s1 --server-host jumba.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
+    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
-- hosts: kubernetes
+- hosts: kube-leader-and-backups
+  tasks:
+    - name: Setup registries
+      become: true
+      ansible.builtin.copy:
+        dest: /etc/rancher/k3s/registries.yaml
+        content: |
+          configs:
+            registry-1.docker.io:
+              auth:
+                username: {{ k3s_docker_username }}
+                password: {{ k3s_docker_pw }}
+                
+    - name: Restart k3s
+      ansible.builtin.shell: "service k3s restart && sleep 30"
+      throttle: 1
+      become: true
