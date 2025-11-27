@@ -336,6 +336,8 @@ spec:
       hostNetwork: true
       nodeSelector:
         svccontroller.k3s.cattle.io/enablelb: "true"
+        kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
       serviceAccountName: speaker
       terminationGracePeriodSeconds: 2
       tolerations:
@@ -387,6 +389,8 @@ spec:
           readOnlyRootFilesystem: true
       nodeSelector:
         kubernetes.io/os: linux
+        svccontroller.k3s.cattle.io/enablelb: "true"
+        kubernetes.io/arch: amd64
       securityContext:
         runAsNonRoot: true
         runAsUser: 65534

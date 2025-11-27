@@ -2,34 +2,34 @@ all:
   children:
     cdn:
       hosts:
-        jumba:
-        nani:
-        turo:
-        experiment221:
+#        jumba:
+#        nani:
+#        turo:
+#        experiment221:
 #    router:
 #      hosts:
 #        ohana
-    route-server:
-      hosts:
-        turo
+#    route-server:
+#      hosts:
+#        turo
     rpki:
-    dns:
-      children:
-        dns-leader:
-          hosts:
-            jumba
-        dns-follower:
-          hosts:
-            majesty
+#    dns:
+#      children:
+#        dns-leader:
+#          hosts:
+#            jumba
+#        dns-follower:
+#          hosts:
+#            majesty
     database:
       children:
         db-leader:
-          hosts:
-            nani:
-              server_id: 1
-              data_dir: "/db/"
-              bind_address: 0.0.0.0
-              repmgr_priority: 300
+#          hosts:
+#            nani.local.pigscanfly.ca:
+#              server_id: 1
+#              data_dir: "/db/"
+#              bind_address: 0.0.0.0
+#              repmgr_priority: 300
         db-followers:
           hosts:
 #            david:
@@ -37,28 +37,27 @@ all:
 #              data_dir: "/db/"
 #              bind_address: 127.0.0.1
 #              repmgr_priority: 200
-            jumba:
-              server_id: 3
-              data_dir: "/primary/db"
-              bind_address: 127.0.0.1
-              repmgr_priority: 300
-    storage:
-      hosts:
-        jumba
+#            jumba:
+#              server_id: 3
+#              data_dir: "/primary/db"
+#              bind_address: 127.0.0.1
+#              repmgr_priority: 300
+#    storage:
+#      hosts:
+#        jumba
     kubernetes:
       children:
         kube-leader-and-backups:
           children:
             kube-leader:
               hosts:
-                turo:
+                turo.local.pigscanfly.ca:
             leader-backup:
               hosts:
 #                nani:
 #                experiment624:
 #                majesty:
-                experiment624:
-                plushy:
+#                plushy.local.pigscanfly.ca:
         workers:
           children:
             pis:
@@ -77,12 +76,13 @@ all:
                   children:
                     arm-gpus:
                       hosts:
-                        k8s-worker-nv1:
+#                        k8s-worker-nv1:
 #                        k8s-worker-nv2:
-                        k8s-worker-nv3:
+#                        k8s-worker-nv3:
                     x86-gpus:
                       hosts:
-                        plushy:
+                        plushy.local.pigscanfly.ca:
+                        scrump.local.pigscanfly.ca:
                 amd-gpus:
                   hosts:
 #                    experiment221:
@@ -91,6 +91,7 @@ all:
 #                    experiment626:
 #                    bubbles:
 #                    experiment623:
-                    turo:
+#                    turo:
 #                    experiment625:
+#                     nani.local.pigscanfly.ca
 localhost:

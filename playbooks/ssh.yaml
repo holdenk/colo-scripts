@@ -43,14 +43,14 @@
   - name: Fetch the keyfile from the node to master
     fetch: 
       src: "~/.ssh/id_rsa.pub"
-      dest: "buffer/{{ansible_hostname}}-id_rsa.pub"
+      dest: "buffer/{{inventory_hostname}}-id_rsa.pub"
       flat: yes
     become: yes
 
   - name: Fetch the keyfile from the node to master
     fetch: 
       src: "~/.ssh/id_rsa.pub"
-      dest: "buffer/{{ansible_hostname}}-id_rsa_magic.pub"
+      dest: "buffer/{{inventory_hostname}}-id_rsa_magic.pub"
       flat: yes
 
   - name: Copy the key add to authorized_keys using Ansible module

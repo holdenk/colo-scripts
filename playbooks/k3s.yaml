@@ -1,5 +1,7 @@
 ---
 - hosts: kubernetes
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Finish any partial configs
     ansible.builtin.shell: "dpkg --configure -a"
@@ -8,16 +10,17 @@
     ansible.builtin.shell: "modprobe ip_conntrack_ftp ports=4559"
     become: true
   - name: Load nf_conntrack_proto_gre
+    become: true
     copy:
       dest: "/etc/modules-load.d/nf_conntrack_proto_gre.conf"
       content: |
         nf_conntrack_proto_gre
   - name: Load ip_conntrack_ftp
+    become: true
     copy:
       dest: "/etc/modules-load.d/ip_conntrack_ftp.conf"
       content: |
         ip_conntrack_ftp ports=4559
-    become: yes
   - name: Install some base libraries we need
     apt:
       pkg:
@@ -28,57 +31,55 @@
         - lsb-release
         - open-iscsi
         - jq
-        - ntp
         - ecryptfs-utils
+    become: yes
+  - name: Install ntpsec if available, otherwise ntp
+    block:
+      - name: Try to install ntpsec (newer distros)
+        apt:
+          name: ntpsec
+          state: present
+        register: ntpsec_result
+        ignore_errors: yes       # OK if the package doesn't exist
+
+      - name: Install ntp (fallback for older distros)
+        apt:
+          name: ntp
+          state: present
+        when: ntpsec_result is failed
     become: yes
   - name: Remove the thing to disable lxc rp_filter
     ansible.builtin.file:
       state: absent
       path: /etc/sysctl.d/90-override.conf
     become: true
-  - name: Create the encrypted storage area
-    ansible.builtin.file:
-      state: directory
-      path: /db/encrypted
-      owner: root
-      group: root
-      mode: '0700'
-    become: true
-  - name: Create the encrypted DB directory
-    ansible.builtin.file:
-      state: directory
-      path: /db/encrypted-backing
-      owner: root
-      group: root
-      mode: '0700'
-    become: true
-  - name: Save the generated passphrase to /pw
-    ansible.builtin.copy:
-      content: "{{ DB_ENC_PW }}"
-      dest: /pw
-      owner: root
-      group: root
-      mode: '0600'
-    become: true
-  - name: Ensure ecryptfs entry is in /etc/fstab
-    ansible.builtin.lineinfile:
-      path: /etc/fstab
-      line: "/db/encrypted-backing /db/encrypted ecryptfs key=passphrase,noauto,ecryptfs_cipher=aes,ecryptfs_key_bytes=16,ecryptfs_passthrough=n,ecryptfs_enable_filename_crypto=n 0 0"
-      state: present
-      regexp: "^/db/encrypted\\s+/db/encrypted\\s+ecryptfs\\s+.*"
-    become: true
   - name: Restart sysctl
     ansible.builtin.shell: "systemctl restart systemd-sysctl"
     become: true
-  - name: Add an Apt signing key for 2ndquadrant
-    ansible.builtin.apt_key:
-      url: https://download.docker.com/linux/ubuntu/gpg
-      state: present
+  - name: Ensure keyring directory exists
+    file:
+      path: /etc/apt/keyrings
+      state: directory
+      mode: "0755"
     become: yes
-  - name: Add docker repo
-    ansible.builtin.apt_repository:
-      repo: "deb https://download.docker.com/linux/ubuntu {{ ansible_distribution_release }} stable"
-      update_cache: true
+  - name: Download Docker GPG key (for containerd)
+    get_url:
+      url: https://download.docker.com/linux/{{ ansible_distribution | lower }}/gpg
+      dest: /etc/apt/keyrings/docker.asc
+      mode: "0644"
+    become: yes
+
+  - name: Add Docker apt repository (modern keyring syntax)
+    copy:
+      dest: /etc/apt/sources.list.d/docker-modern.list
+      mode: "0644"
+      content: |
+        deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
+    become: yes
+
+  - name: Update apt cache
+    apt:
+      update_cache: yes
     become: yes
   - name: Install containerd.io
     apt:
@@ -107,6 +108,8 @@ defaults {
     ansible.builtin.shell: "systemctl restart multipathd.service || echo \"no multipath yay\""
     become: true
 - hosts: kube-leader
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install docker
     apt:
@@ -116,8 +119,8 @@ defaults {
         - docker-ce-cli
     become: yes
   - name: Install k3s leader
-    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq' --cluster"
-#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
+    ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '{{k3s_server_args}}' --cluster"
+#    ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
@@ -153,10 +156,12 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 '
       dest: /etc/systemd/system/k3s.service.env
     become: true
-  - name: Restart k3s
-    ansible.builtin.shell: "service k3s restart && sleep 3"
-    become: true
+#  - name: Restart k3s
+#    ansible.builtin.shell: "service k3s restart && sleep 3"
+#    become: true
 - hosts: leader-backup
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install docker
     apt:
@@ -166,8 +171,8 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
         - docker-ce-cli
     become: yes
   - name: Install k3s backups
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq --node-label svccontroller.k3s.cattle.io/enablelb=true' --server-host turo.pigscanfly.ca --server || (sleep 10 && k3sup join --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --k3s-extra-args '--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq --node-label svccontroller.k3s.cattle.io/enablelb=true' --server-host turo.pigscanfly.ca --server)"
-#    ansible.builtin.shell: "k3sup install --k3s-version v1.29.13+k3s1 --host $(hostname).pigscanfly.ca --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
+    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label svccontroller.k3s.cattle.io/enablelb=true  --embedded-registry' --server-host {{primary_leader}} --server"
+#    ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
@@ -183,17 +188,21 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     become: true
     throttle: 1
 - hosts: pis
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install extra modules for pi
     apt:
       pkg:
         - linux-modules-extra-raspi
   - name: Install k3s workers on PIs with containerd & storage role
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/storage=storage'"
+    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{shared_k3s_args}} --node-label node.kubernetes.io/storage=storage'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
 - hosts: docker-hosts
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install docker and friends
     apt:
@@ -203,6 +212,8 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
         - containerd.io
     become: yes
 - hosts: arm-gpus
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install nvidia stuff
     apt:
@@ -213,14 +224,46 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
         - nvidia-docker2
     become: yes
 - hosts: x86-gpus
+  vars_files:
+    - k3s-vars.yaml
   tasks:
-  - name: Install nvidia stuff
-    apt:
-      pkg:
-        - nvidia-container-toolkit
+  - name: Setup nv container toolkit apt repo
+    shell:
+      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
+      && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
+      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
+      tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    args:
+      creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
     become: yes
+  - name: Check if nvidia-container-toolkit package is available
+    command: apt-cache search nvidia-container-toolkit
+    register: nvidia_ctk_check
+    failed_when: false
+    changed_when: false
+
+  - name: Install nvidia-container-toolkit if available
+    apt:
+      name: nvidia-container-toolkit
+      state: present
+    when: nvidia_ctk_check.rc == 0
+    become: yes
+
+  - name: Check if nv docker2 package is available
+    command: apt-cache search nvidia-docker2
+    register: nv_docker2
+    failed_when: false
+    changed_when: false
+
+  - name: Install nvidia-container-toolkit if available
+    apt:
+      name: nvidia-docker2
+      state: present
+    when: nv_docker2.rc == 0
+    become: yes
+
   - name: Install k3s workers with gpus
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label node.kubernetes.io/gpu=gpu' "
+    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label node.kubernetes.io/gpu=gpu  --embedded-registry' --server"
     args:
       creates: /usr/local/bin/k3s
     become: true
@@ -262,9 +305,11 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     ansible.builtin.shell: "systemctl restart k3s-agent || systemctl restart k3s"
     become: true
 - hosts: amd-gpus
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install on AMD GPU hosts
-    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
+    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{shared_k3s_args}} --node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -309,19 +354,27 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     become: true
     throttle: 1
 - hosts: x86
+  vars_files:
+    - k3s-vars.yaml
   tasks:
   - name: Install k3s workers on vanilla x86 nodes
-    ansible.builtin.shell: "k3sup join --k3s-version v1.29.13+k3s1 --server-host turo.pigscanfly.ca --host $(hostname).pigscanfly.ca --k3s-extra-args '--node-label svccontroller.k3s.cattle.io/enablelb=true'"
+    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{shared_k3s_args}} --node-label svccontroller.k3s.cattle.io/enablelb=true  --embedded-registry'"
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
 - hosts: kube-leader-and-backups
+  vars_files:
+    - k3s-vars.yaml
   tasks:
     - name: Setup registries
       become: true
       ansible.builtin.copy:
         dest: /etc/rancher/k3s/registries.yaml
         content: |
+          mirrors:
+            docker.io:
+              endpoint:
+                - "https://registry-1.docker.io"
           configs:
             registry-1.docker.io:
               auth:

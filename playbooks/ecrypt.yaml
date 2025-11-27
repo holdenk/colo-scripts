@@ -1,0 +1,123 @@
+---
+- name: Configure /db/encrypted ecryptfs on k8s nodes
+  hosts: kubernetes
+  become: true
+  gather_facts: true
+
+  vars:
+    ecryptfs_backing_dir: /db/encrypted-backing
+    ecryptfs_mount_dir: /db/encrypted
+    ecryptfs_fstype: ecryptfs
+
+    ecryptfs_modules:
+      - ecryptfs
+
+    # Basic package mapping; tweak if you have oddball distros
+    ecryptfs_package_map:
+      Debian: ["ecryptfs-utils"]
+      Ubuntu: ["ecryptfs-utils"]
+      RedHat: ["ecryptfs-utils"]
+      CentOS: ["ecryptfs-utils"]
+      Rocky: ["ecryptfs-utils"]
+
+  tasks:
+    - name: Determine ecryptfs packages for this OS
+      ansible.builtin.set_fact:
+        ecryptfs_packages: >-
+          {{ ecryptfs_package_map.get(ansible_distribution,
+             ecryptfs_package_map.get(ansible_os_family, ['ecryptfs-utils'])) }}
+
+    - name: Install ecryptfs userspace / tools
+      ansible.builtin.package:
+        name: "{{ ecryptfs_packages }}"
+        state: present
+
+    - name: Ensure ecryptfs kernel modules are loaded now
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ ecryptfs_modules }}"
+      ignore_errors: true  # fine if built-in or differently named
+
+    - name: Ensure ecryptfs modules load at boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/ecryptfs.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          {% for m in ecryptfs_modules %}
+          {{ m }}
+          {% endfor %}
+
+    - name: Ensure backing directory exists
+      ansible.builtin.file:
+        path: "{{ ecryptfs_backing_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Ensure mount directory exists
+      ansible.builtin.file:
+        path: "{{ ecryptfs_mount_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # ------------------------------------------------------------------
+    # Detect if it's already mounted; if it is, we don't touch keys/mount
+    # ------------------------------------------------------------------
+    - name: Check if /db/encrypted is already a mountpoint
+      ansible.builtin.command: mountpoint -q "{{ ecryptfs_mount_dir }}"
+      register: ecryptfs_mountpoint_check
+      failed_when: false
+      changed_when: false
+
+    # ------------------------------------------------------------------
+    # First-time / not-mounted path: add passphrase, get sig, set up fstab,
+    # and mount using the sig (non-interactive).
+    # ------------------------------------------------------------------
+
+
+    - name: Build ecryptfs option strings (fstab + runtime)
+      ansible.builtin.set_fact:
+        # We DO NOT want this to mount at boot -> noauto
+        ecryptfs_fstab_opts: >-
+          noauto,
+          ecryptfs_cipher=aes,
+          ecryptfs_key_bytes=16,
+          ecryptfs_passthrough=n,
+          ecryptfs_enable_filename_crypto=n,
+          no_sig_cache
+        # Runtime mount options (no noauto)
+        ecryptfs_mount_opts: >-
+          key=passphrase:passphrase_passwd={{ ecrypt_pw }},
+          ecryptfs_cipher=aes,
+          ecryptfs_key_bytes=16,
+          ecryptfs_passthrough=n,
+          ecryptfs_enable_filename_crypto=n,
+          no_sig_cache
+      when: ecryptfs_mountpoint_check.rc != 0
+
+    - name: Normalize ecryptfs option strings (strip spaces)
+      ansible.builtin.set_fact:
+        ecryptfs_fstab_opts: "{{ ecryptfs_fstab_opts | regex_replace('\\s+', '') }}"
+        ecryptfs_mount_opts: "{{ ecryptfs_mount_opts | regex_replace('\\s+', '') }}"
+      when: ecryptfs_mountpoint_check.rc != 0
+
+    - name: Ensure ecryptfs fstab entry (with noauto) is present
+      ansible.builtin.mount:
+        src: "{{ ecryptfs_backing_dir }}"
+        path: "{{ ecryptfs_mount_dir }}"
+        fstype: "{{ ecryptfs_fstype }}"
+        opts: "{{ ecryptfs_fstab_opts }}"
+        state: present
+      when: ecryptfs_mountpoint_check.rc != 0
+
+    - name: Mount /db/encrypted ecryptfs filesystem (explicit, using signature)
+      ansible.builtin.command: >
+        mount -t ecryptfs {{ ecryptfs_backing_dir }} {{ ecryptfs_mount_dir }}
+        -o {{ ecryptfs_mount_opts }}
+      when: ecryptfs_mountpoint_check.rc != 0

@@ -259,6 +259,7 @@
           HEALTH_BACKEND_HOST: "{{HEALTH_BACKEND_HOST}}"
           HEALTH_BACKEND_PORT: "{{HEALTH_BACKEND_PORT}}"
           HEALTH_BACKEND_MODEL: "{{HEALTH_BACKEND_MODEL}}"
+          NEW_HEALTH_BACKEND_HOST: "{{NEW_HEALTH_BACKEND_HOST}}"
           HEALTH_BACKUP_BACKEND_HOST: "{{HEALTH_BACKUP_BACKEND_HOST}}"
           HEALTH_BACKUP_BACKEND_PORT: "{{HEALTH_BACKUP_BACKEND_PORT}}"
           HEALTH_BACKUP_BACKEND_MODEL: "{{HEALTH_BACKUP_BACKEND_MODEL}}"
@@ -356,11 +357,16 @@
           STATIC_URL: "/static/"
           MEDIA_URL: "/media/"
       state: present
-#  - name: Install helm
-#    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
-#    args:
-#      creates: /usr/local/bin/helm
-#    become: true
+  - name: Check if helm is already installed
+    ansible.builtin.stat:
+      path: /usr/local/bin/helm
+    register: helm_stat
+  - name: Install helm
+    args:
+      creates: /usr/local/bin/helm
+    ansible.builtin.shell: "curl https://raw.githubusercontent.com/helm/helm/master/scripts/get-helm-3 | bash"
+    become: true
+    when: not helm_stat.stat.exists
   - name: Add gpu operator
     kubernetes.core.helm_repository:
       name: nvidia
@@ -413,13 +419,28 @@
     kubernetes.core.helm_repository:
       name: jetstack
       repo_url: "https://charts.jetstack.io"
-  - name: Install metallb
-    ansible.builtin.shell: "kubectl apply -f https://raw.githubusercontent.com/metallb/metallb/v0.14.9/config/manifests/metallb-native.yaml; sleep 30; kubectl apply -f /home/holden/repos/colo-scripts/updated_resources.yaml; sleep 20"
-#  - name: Deploy ray
-#    kubernetes.core.helm:
-#      name: kuberay-operator
-#      chart_ref: kuberay/kuberay-operator
-#      chart_version: 1.2.2
+  - name: Add metallb chart
+    kubernetes.core.helm_repository:
+      name: metallb
+      repo_url: "https://metallb.github.io/metallb"
+  - name: Install / upgrade Metallb via Helm
+    kubernetes.core.helm:
+      name: metallb
+      chart_ref: metallb/metallb
+      release_namespace: metallb-system
+      create_namespace: false
+      wait: yes
+      wait_timeout: 600s
+      values:
+        speaker:
+          frr:
+            enabled: false
+  - name: Apply Metallb config (pools + BGP/L2)
+    community.kubernetes.k8s:
+      state: present
+      src: /home/holden/repos/colo-scripts/metallb-config2.yaml
+      wait: yes
+      wait_timeout: 120
   - name: Deplot cloud native postgres
     kubernetes.core.helm:
       name: cnpg

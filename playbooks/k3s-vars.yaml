@@ -1,0 +1,5 @@
+k3s_version: v1.34.2+k3s1
+domain: local.pigscanfly.ca
+primary_leader: "turo.{{domain}}"
+shared_k3s_args: "--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq  --embedded-registry"
+k3s_server_args: "{{shared_k3s_args}} --cluster-cidr 10.111.0.0/16 --service-cidr 10.112.0.0/16"
