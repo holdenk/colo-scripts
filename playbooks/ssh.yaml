@@ -7,6 +7,14 @@
       shell: /bin/bash
       groups: sudo
       append: yes
+    become: yes
+  - name: Add the user 'warrick' with a bash shell, appending the group 'sudo'
+    ansible.builtin.user:
+      name: warrick
+      shell: /bin/bash
+      groups: sudo
+      append: yes
+    become: yes
   - name: create user private keys if not present
     ansible.builtin.shell: "mkdir ~/.ssh; ssh-keygen  -N '' -f ~/.ssh/id_rsa"
     args:
@@ -27,6 +35,18 @@
       user: holden
       state: present
       key: "{{ keys.content }}"
+  - name: pull keys from github
+    uri:
+      url: https://github.com/nyghtowl.keys
+      return_content: True
+    register: warrick_keys
+    failed_when: "'ssh-rsa' not in keys.content"
+  - name: Configure SSH access
+    authorized_key:
+      user: warrick
+      state: present
+      key: "{{ warrick_keys.content }}"
+    become: yes
   - name: Configure root SSH access
     authorized_key:
       user: root

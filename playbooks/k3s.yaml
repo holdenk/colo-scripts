@@ -32,6 +32,15 @@
         - open-iscsi
         - jq
         - ecryptfs-utils
+        - nfs-common
+        - fuse-overlayfs
+        - apparmor-utils
+    become: yes
+  - name: Ensure the 'dm_crypt' module is loaded and persistent
+    community.general.modprobe:
+      name: dm_crypt
+      state: present
+      persistent: present
     become: yes
   - name: Install ntpsec if available, otherwise ntp
     block:
@@ -156,6 +165,14 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 '
       dest: /etc/systemd/system/k3s.service.env
     become: true
+  - name: Patch K3s local-storage manifest to include encrypted path
+    ansible.builtin.replace:
+      path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
+      # Look for the paths array and swap it for our expanded version
+      regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
+      replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
+      backup: yes
+    become: true
 #  - name: Restart k3s
 #    ansible.builtin.shell: "service k3s restart && sleep 3"
 #    become: true
@@ -183,10 +200,19 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 '
       dest: /etc/systemd/system/k3s.service.env
     become: true
-  - name: Restart k3s
-    ansible.builtin.shell: "service k3s restart && sleep 3"
+  - name: Patch K3s local-storage manifest to include encrypted path
+    ansible.builtin.replace:
+      path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
+      # Look for the paths array and swap it for our expanded version
+      regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
+      replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
+      backup: yes
+    register: k3s_manifest_patch
     become: true
-    throttle: 1
+#  - name: Restart k3s
+#    ansible.builtin.shell: "service k3s restart && sleep 3"
+#    become: true
+#    throttle: 1
 - hosts: pis
   vars_files:
     - k3s-vars.yaml
@@ -263,7 +289,7 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     become: yes
 
   - name: Install k3s workers with gpus
-    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label node.kubernetes.io/gpu=gpu  --embedded-registry' --server"
+    ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label node.kubernetes.io/agpu=agpu  --embedded-registry' --server"
     args:
       creates: /usr/local/bin/k3s
     become: true

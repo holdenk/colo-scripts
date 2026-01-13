@@ -158,6 +158,26 @@
           ENVIRONMENT: "production"
           SSL: "on"
       state: present
+  - name: Ensure image pull secret exists for totallylegitco
+    kubernetes.core.k8s:
+      state: present
+      namespace: totallylegitco
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: secret-docker
+        type: kubernetes.io/dockerconfigjson
+        data:
+          .dockerconfigjson: "{{ {
+          'auths': {
+            'https://registry-1.docker.io': {
+              'username': k3s_docker_username,
+              'password': k3s_docker_pw,
+              'auth': (k3s_docker_username ~ ':' ~ k3s_docker_pw) | b64encode
+            }
+          }
+          } | to_json | b64encode }}"
   - name: Create totallylegitco primary secrets
     community.kubernetes.k8s:
       definition:
@@ -217,9 +237,20 @@
           name: pg-backup2
           namespace: totallylegitco
         stringData:
-          PG_ACCESS_KEY_ID: "{{PG_B2_ACCESS_KEY_ID2}}"
-          PG_ACCESS_SECRET_KEY: "{{PG_B2_SECRET_KEY2}}"
+          PG_ACCESS_KEY_ID: "{{PG_B2_ACCESS_KEY_ID3}}"
+          PG_ACCESS_SECRET_KEY: "{{PG_B2_SECRET_KEY3}}"
       state: present
+  - name: Create totallylegitco secrets
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: magic-rag-secret
+          namespace: totallylegitco
+        stringData:
+          RAG_SECRET_KEY: "{{RAG_SECRET_KEY}}"
+          RAG_OPENSEARCH_PASSWORD: "{{RAG_OPENSEARCH_PASSWORD}}"
   - name: Create totallylegitco secrets
     community.kubernetes.k8s:
       definition:
@@ -229,10 +260,16 @@
           name: fight-health-insurance-secret
           namespace: totallylegitco
         stringData:
+          RAG_SECRET_KEY: "{{RAG_SECRET_KEY}}"
+          RAG_OPENSEARCH_PASSWORD: "{{RAG_OPENSEARCH_PASSWORD}}"
           PDBUSER: "{{FIGHT_HEALTH_PG_USER}}"
           PDBPASSWORD: "{{FIGHT_HEALTH_PG_PASSWORD}}"
           PDBNAME: "app"
-          PDBHOST: "fhi-pg-second-rw.totallylegitco.svc"
+          PDBHOST: "fhi-pg-main-8-rw.totallylegitco.svc"
+          ALPHA_HEALTH_BACKEND_HOST: "{{ALPHA_HEALTH_BACKEND_HOST}}"
+          ALPHA_HEALTH_BACKEND_PORT: "{{ALPHA_HEALTH_BACKEND_PORT}}"
+          ALPHA_HEALTH_BACKUP_BACKEND_HOST: "{{ALPHA_HEALTH_BACKUP_BACKEND_HOST}}"
+          ALPHA_HEALTH_BACKUP_BACKEND_PORT: "{{ALPHA_HEALTH_BACKUP_BACKEND_PORT}}"
           STRIPE_LIVE_SECRET_KEY: "{{FUCK_STRIPE_LIVE_SECRET_KEY}}"
           STRIPE_LIVE_PUBLIC_KEY: "{{FUCK_STRIPE_LIVE_PUBLIC_KEY}}"
           STRIPE_TEST_SECRET_KEY: "{{FUCK_STRIPE_TEST_SECRET_KEY}}"
@@ -250,7 +287,7 @@
           ENVIRONMENT: "Prod"
           DJANGO_SETTINGS_MODULE: "fighthealthinsurance.settings"
           SENTRY_ENDPOINT: "{{SENTRY_ENDPOINT}}"
-          FAXYMCFAXFACE_HOST: "100.123.153.34"
+          FAXYMCFAXFACE_HOST: "10.69.197.33"
           SSL: "on"
           OPENAI_API_BASE: "https://api.endpoints.anyscale.com/v1"
           OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
@@ -275,7 +312,7 @@
           EX_MINIO_BUCKET: "{{EX_MINIO_BUCKET_ALT}}"
           EX_MINIO_REGION: "{{EX_MINIO_REGION}}"
           EX_MINIO_HOST: "{{EX_MINIO_HOST}}"
-          EX_MINIO_HOST_ENDPOINT: "{{EX_MINIO_HOST}}:9000"
+          EX_MINIO_HOST_ENDPOINT: "{{EX_MINIO_HOST}}:443"
           EX_MINIO_USE_HTTPS: "{{EX_MINIO_HTTPS}}"
           EX_MINIO_CERT_CHECK: "{{EX_MINIO_CERT_CHECK}}"
           DEEPINFRA_API: "{{DEEPINFRA_TOKEN}}"
@@ -379,6 +416,10 @@
     kubernetes.core.helm_repository:
       name: cnpg
       repo_url: "https://cloudnative-pg.github.io/charts"
+  - name: Add dns override
+    kubernetes.core.helm_repository:
+      name: eugenmayer
+      repo_url: "https://eugenmayer.github.io/helm-charts/"
   - name: Add bitnami chart
     kubernetes.core.helm_repository:
       name: bitnami
@@ -447,18 +488,24 @@
       chart_ref: cnpg/cloudnative-pg
       release_namespace: cnpg-system
       create_namespace: true
+  - name: Deplot cloud native postgres backup plugin
+    kubernetes.core.helm:
+      name: barman-cloud
+      chart_ref: cnpg/plugin-barman-cloud
+      release_namespace: cnpg-system
+      create_namespace: true
   - name: Deploy nginx
     kubernetes.core.helm:
       name: ingress-nginx
       chart_ref: ingress-nginx/ingress-nginx
       release_namespace: nginx
-      chart_version: 4.9.0
+      chart_version: 4.13.4
       create_namespace: true
       wait: yes
       values:
         controller:
           service:
-            loadBalancerIP: 23.177.16.200
+            loadBalancerIP: 10.42.0.200
             externalTrafficPolicy: Local
           watchIngressWithoutClass: true
           allowSnippetAnnotations: true
@@ -473,7 +520,7 @@
       name: cert-manager
       chart_ref: "jetstack/cert-manager"
       release_namespace: cert-manager
-      chart_version: v1.17.0
+      chart_version: v1.19.1
       create_namespace: true
       wait: yes
       values:
@@ -596,7 +643,7 @@
       name: longhorn
       chart_ref: longhorn/longhorn
       release_namespace: longhorn-system
-      chart_version: 1.8.1
+      chart_version: 1.10.1
       create_namespace: true
       values:
         defaultSettings:

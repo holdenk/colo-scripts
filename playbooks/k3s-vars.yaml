@@ -1,4 +1,4 @@
-k3s_version: v1.34.2+k3s1
+k3s_version: v1.34.3+k3s1
 domain: local.pigscanfly.ca
 primary_leader: "turo.{{domain}}"
 shared_k3s_args: "--disable servicelb --disable traefik --disable-network-policy --flannel-ipv6-masq  --embedded-registry"

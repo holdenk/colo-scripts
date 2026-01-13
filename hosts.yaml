@@ -62,6 +62,11 @@ all:
           children:
             pis:
               hosts:
+                erpi1.local.pigscanfly.ca:
+                erpi2.local.pigscanfly.ca:
+                erpi3.local.pigscanfly.ca:
+                rpi1.local.pigscanfly.ca:
+                rpi2.local.pigscanfly.ca:
 #                k8s-worker-101:
 #                  ansible_user: root
 #                k8s-worker-100:
@@ -76,9 +81,10 @@ all:
                   children:
                     arm-gpus:
                       hosts:
-#                        k8s-worker-nv1:
-#                        k8s-worker-nv2:
-#                        k8s-worker-nv3:
+                        nvmini3.local.pigscanfly.ca:
+                        nvmini4.local.pigscanfly.ca:
+                        k8s-worker-nv1.local.pigscanfly.ca:
+                        k8s-worker-nv3.local.pigscanfly.ca:
                     x86-gpus:
                       hosts:
                         plushy.local.pigscanfly.ca:
