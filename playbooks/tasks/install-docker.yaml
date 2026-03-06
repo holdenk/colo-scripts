@@ -1,0 +1,8 @@
+---
+- name: Install Docker and friends
+  apt:
+    pkg:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+  become: yes

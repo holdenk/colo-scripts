@@ -2,49 +2,12 @@ all:
   children:
     cdn:
       hosts:
-#        jumba:
-#        nani:
-#        turo:
-#        experiment221:
-#    router:
-#      hosts:
-#        ohana
-#    route-server:
-#      hosts:
-#        turo
     rpki:
-#    dns:
-#      children:
-#        dns-leader:
-#          hosts:
-#            jumba
-#        dns-follower:
-#          hosts:
-#            majesty
     database:
       children:
         db-leader:
-#          hosts:
-#            nani.local.pigscanfly.ca:
-#              server_id: 1
-#              data_dir: "/db/"
-#              bind_address: 0.0.0.0
-#              repmgr_priority: 300
         db-followers:
           hosts:
-#            david:
-#              server_id: 2
-#              data_dir: "/db/"
-#              bind_address: 127.0.0.1
-#              repmgr_priority: 200
-#            jumba:
-#              server_id: 3
-#              data_dir: "/primary/db"
-#              bind_address: 127.0.0.1
-#              repmgr_priority: 300
-#    storage:
-#      hosts:
-#        jumba
     kubernetes:
       children:
         kube-leader-and-backups:
@@ -54,10 +17,6 @@ all:
                 turo.local.pigscanfly.ca:
             leader-backup:
               hosts:
-#                nani:
-#                experiment624:
-#                majesty:
-#                plushy.local.pigscanfly.ca:
         workers:
           children:
             pis:
@@ -67,14 +26,6 @@ all:
                 erpi3.local.pigscanfly.ca:
                 rpi1.local.pigscanfly.ca:
                 rpi2.local.pigscanfly.ca:
-#                k8s-worker-101:
-#                  ansible_user: root
-#                k8s-worker-100:
-#                  ansible_user: root
-#                k8s-worker-102:
-#                  ansible_user: root
-#                k8s-worker-jetson-nano:
-#                  ansible_user: root
             docker-hosts:
               children:
                 gpus:
@@ -91,13 +42,6 @@ all:
                         scrump.local.pigscanfly.ca:
                 amd-gpus:
                   hosts:
-#                    experiment221:
                 x86:
                   hosts:
-#                    experiment626:
-#                    bubbles:
-#                    experiment623:
-#                    turo:
-#                    experiment625:
-#                     nani.local.pigscanfly.ca
 localhost:

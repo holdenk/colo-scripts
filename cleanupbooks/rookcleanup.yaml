@@ -5,7 +5,10 @@
   - name: Delete ceph cluster
     ansible.builtin.shell: "kubectl delete -n rook-ceph -f /home/holden/repos/colo-scripts/rook-ceph-cluster.yaml"
   - name: Delete ceph provisioner
-    ansible.builtin.shell: "kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/rbd/storageclass-ec.yaml; kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/filesystem.yaml --validate=false; kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml"
+    ansible.builtin.shell: >-
+      kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/rbd/storageclass-ec.yaml;
+      kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/filesystem.yaml --validate=false;
+      kubectl delete -f https://raw.githubusercontent.com/rook/rook/master/cluster/examples/kubernetes/ceph/csi/cephfs/storageclass.yaml
   - name: Add Rook Ceph chart
     community.kubernetes.helm_repository:
       name: rook-release

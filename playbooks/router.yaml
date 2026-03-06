@@ -19,6 +19,8 @@
       state: latest
     become: yes
 - hosts: router
+  vars_files:
+    - frr-shared-vars.yaml
   tasks:
   - name: Install some networking tools
     apt:
@@ -52,55 +54,6 @@
         ripd: false
         ripngd: false
         zebra: true
-      frr_prefix_list:
-        Bad_IPs:
-          05 permit:
-            prefix: 192.168.88.0/24
-            match: ge 32
-          10 permit:
-            prefix: 172.16.0.0/16
-            match: le 32
-        DefaultOnlyV4:
-          10 permit:
-            prefix: 0.0.0.0/0
-          20 deny:
-            prefix: any
-        MetallbV4:
-          10 permit:
-            prefix: any
-        AnnounceV4:
-          10 permit:
-            prefix: 23.177.16.0/24
-          20 permit:
-            prefix: 209.209.73.0/24
-          30 deny:
-            prefix: any
-        AcceptMostV4:
-          10 deny:
-            prefix: "0.0.0.0/0"
-          20 permit:
-            prefix: any
-      frr_prefix_list_v6:
-        Bad_IPs:
-          05 permit:
-            prefix: 1234:5678::/32
-            match: ge 128
-        AcceptMostV6:
-          10 deny:
-            prefix: "::/0"
-          20 permit:
-            prefix: any
-        AnnounceV6:
-          05 permit:
-            prefix: 2602:FCB1::/36
-          10 deny:
-            prefix: any
-        DefaultOnlyV6:
-          40 deny:
-            prefix: any
-        MetallbV6:
-          10 permit:
-            prefix: any
       frr_bgp:
         asns:
           399306:
@@ -160,7 +113,7 @@
                 asn: 6939
                 other:
                   - "prefix-list AnnounceV4 out"
-                  - "prefix-list AcceptMost in"                
+                  - "prefix-list AcceptMost in"
               206.80.238.10:
                 asn: 43126
                 other:
@@ -176,7 +129,6 @@
                   - "prefix-list AcceptMostV6 in"
               206.80.238.253:
                 asn: 33495
-#                peer_group: fcix
                 other:
                   - "prefix-list AnnounceV4 out"
               206.80.238.2:
@@ -193,13 +145,11 @@
               206.80.238.254:
                 description: "fcixv4"
                 asn: 33495
-#                peer_group: fcix
                 other:
                   - "prefix-list AnnounceV4 out"
                   - "prefix-list AcceptMostV4 in"
               "2001:504:91::253":
                 asn: 33495
-#                peer_group: fcixv6
                 description: "fcixv6"
                 next_hop_self: true
                 other:
@@ -249,7 +199,6 @@
               "2001:504:91::9":
                 description: "he.net (v6) over fcix"
                 asn: 6939
-#                peer_group: hev6-over-fcix
                 other:
                   - "prefix-list AnnounceV4 out"
                   - "weight 1000"
@@ -261,7 +210,6 @@
               "fd00:2001:470:2::1":
                 asn: 6939
                 description: "he.net"
-#                peer_group: hev6
                 other:
                   - "prefix-list AnnounceV4 out"
                   - "weight 1"
@@ -284,15 +232,12 @@
             networks_v6:
               - 2602:FCB1::/36
             redistribute:
-#              - bgp
               - connected
               - static
             redistribute_v6:
-#              - bgp
               - connected
               - static
       frr_static:
-#        "0.0.0.0/0": 172.18.0.13
         "23.177.16.0/24": enp6s0np1
         "209.209.73.0/24": enp6s0np1
         "64.71.157.128/27": enp6s0np1
@@ -300,10 +245,8 @@
       frr_static_v6:
         "::/0": "fd00:2001:470:2::1"
         "2602:FCB1::/36": enp6s0np1
-#        "2602:FCB1::1337:1/64": enp6s0np1
       frr_interfaces:
-# Top RJ45 copper next to the SFP port, linked to HE
-# Commented out to keep this from overriding the static netplan route
+        # Top RJ45 copper next to the SFP port, linked to HE
         eno6:
           ip:
             - 172.18.0.12/30
@@ -311,8 +254,8 @@
             - fd00:2001:470:2::2/126
           other:
             - "no ipv6 nd suppress-ra"
-# Note: the SFP network card currently installed seems to flap occasionally so disable link detection.
-# SFP port to local switch
+        # Note: the SFP network card currently installed seems to flap occasionally so disable link detection.
+        # SFP port to local switch
         enp6s0np1:
           ip:
             - 64.71.157.128/27
@@ -324,9 +267,9 @@
             - 2602:FCB1::1337:1/64
           other:
             - "no ipv6 nd suppress-ra"
-# Occasionally this flaps for unknown reasons
+            # Occasionally this flaps for unknown reasons
             - "no link-detect"
-# SFP port to FCIX
+        # SFP port to FCIX
         enp6s0np0:
           ip:
             - 206.80.238.127/24
@@ -334,9 +277,9 @@
             - 2001:504:91::127/64
           other:
             - "no ipv6 nd suppress-ra"
-# Occasionally this flaps for unknown reasons
+            # Occasionally this flaps for unknown reasons
             - "no link-detect"
-# Make sure static routes are configured
+  # Make sure static routes are configured
   - name: Add static route
     ansible.builtin.lineinfile:
       path: /etc/frr/daemons
@@ -347,12 +290,6 @@
       path: /etc/frr/daemons
       line: zebra_options="  -A 127.0.0.1 --retain --nl-bufsize 9000000012 --v6-rr-semantics"
     become: yes
-#  - name: Disable zebra nexthop (seeing crashes)
-#    ansible.builtin.lineinfile:
-#      path: /etc/frr/frr.conf
-#      line: no zebra nexthop kernel enable
-#    become: yes
   - name: Reload the config
     ansible.builtin.shell: /etc/init.d/frr reload
     become: yes
-

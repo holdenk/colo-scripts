@@ -55,34 +55,10 @@
       path: "/var/lib/rook"
       state: "absent"
     become: true
-#  - name: Zap
-#    ansible.builtin.shell: "/zap || echo \"nozap\""
-#    become: true
   - name: Cleanup promisc
     file:
       path: "/etc/init.d/make-promisc"
       state: "absent"
     become: true
-#  - name: Remove docker, containerd and friends
-#    apt:
-#      pkg:
-#        - docker
-#        - docker-engine
-#        - docker.io
-#        - runc
-#        - containerd
-#        - docker-ce
-#        - docker-ce-cli
-#        - containerd.io
-#      state: absent
-#      purge: yes
-#    become: yes
 - hosts: kubernetes
   become: true
-#  serial: 1
-#  roles:
-#  - role: GROG.reboot
-#    reboot_connect_timeout: 120
-#    reboot_interval: yes
-#    reboot_interval_seconds: 480
-#    reboot_wait_timeout: 900
