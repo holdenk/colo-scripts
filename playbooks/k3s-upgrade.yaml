@@ -1,0 +1,356 @@
+---
+# K3s Rolling Upgrade Playbook
+# Usage: ansible-playbook -i hosts.yaml --vault-id dev@secret --extra-vars '@passwd.yml' playbooks/k3s-upgrade.yaml
+#
+# Before running:
+#   1. Update k3s_version in playbooks/k3s-vars.yaml to the target version
+#   2. Review the changelog for breaking changes
+#   3. Ensure you have ssh access to all nodes
+
+# Pre-flight checks on leader
+- hosts: kube-leader
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Check all nodes are Ready
+    ansible.builtin.shell: |
+      kubectl get nodes --no-headers | while read line; do
+        status=$(echo "$line" | awk '{print $2}')
+        if [ "$status" != "Ready" ]; then
+          echo "FAIL: $line"
+          exit 1
+        fi
+      done
+      echo "All nodes Ready"
+    register: node_check
+    changed_when: false
+    become: true
+
+  - name: Display current node versions
+    ansible.builtin.shell: "kubectl get nodes -o wide"
+    register: node_versions
+    changed_when: false
+    become: true
+
+  - name: Show current versions
+    debug:
+      msg: "{{ node_versions.stdout_lines }}"
+
+  - name: Save etcd snapshot before upgrade
+    ansible.builtin.shell: "k3s etcd-snapshot save --name pre-upgrade-$(date +%Y%m%d-%H%M%S)"
+    become: true
+
+  - name: Display target version
+    debug:
+      msg: "Upgrading cluster to k3s {{ k3s_version }}"
+
+# Upgrade leader node
+- hosts: kube-leader
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon leader node
+    ansible.builtin.shell: "kubectl cordon $(hostname)"
+    become: true
+
+  - name: Upgrade k3s on leader via k3sup
+    ansible.builtin.shell: "k3sup install --k3s-version {{ k3s_version }} --host $(hostname).{{ domain }} --context k3s --k3s-extra-args '{{ k3s_server_args }}' --cluster"
+    become: true
+
+  - name: Wait for k3s service to be active
+    ansible.builtin.shell: "systemctl is-active k3s"
+    register: k3s_status
+    until: k3s_status.rc == 0
+    retries: 12
+    delay: 10
+    become: true
+
+  - name: Wait for node to be Ready
+    ansible.builtin.shell: "kubectl get node $(hostname) --no-headers | awk '{print $2}'"
+    register: node_status
+    until: node_status.stdout == "Ready,SchedulingDisabled"
+    retries: 30
+    delay: 10
+    changed_when: false
+    become: true
+
+  - name: Uncordon leader node
+    ansible.builtin.shell: "kubectl uncordon $(hostname)"
+    become: true
+
+  - name: Verify API server health
+    ansible.builtin.shell: "kubectl get nodes --no-headers | head -5"
+    register: post_leader
+    changed_when: false
+    become: true
+
+  - name: Show post-leader-upgrade status
+    debug:
+      msg: "{{ post_leader.stdout_lines }}"
+
+# Upgrade backup leaders (if any are active)
+- hosts: leader-backup
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon backup leader
+    ansible.builtin.shell: "kubectl cordon $(hostname)"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Drain backup leader
+    ansible.builtin.shell: "kubectl drain $(hostname) --ignore-daemonsets --delete-emptydir-data --timeout=300s"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Upgrade k3s on backup leader
+    ansible.builtin.shell: "k3sup join --k3s-version {{ k3s_version }} --host $(hostname).{{ domain }} --k3s-extra-args '{{ k3s_server_args }} --node-label svccontroller.k3s.cattle.io/enablelb=true --embedded-registry' --server-host {{ primary_leader }} --server"
+    become: true
+
+  - name: Wait for k3s service to be active
+    ansible.builtin.shell: "systemctl is-active k3s"
+    register: k3s_status
+    until: k3s_status.rc == 0
+    retries: 12
+    delay: 10
+    become: true
+
+  - name: Uncordon backup leader
+    ansible.builtin.shell: "kubectl uncordon $(hostname)"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Brief pause before next node
+    ansible.builtin.pause:
+      seconds: 30
+
+# Upgrade Raspberry Pi workers
+- hosts: pis
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon worker
+    ansible.builtin.shell: "kubectl cordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Drain worker
+    ansible.builtin.shell: "kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --timeout=300s"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Stop k3s agent
+    ansible.builtin.shell: "systemctl stop k3s-agent"
+    become: true
+    ignore_errors: true
+
+  - name: Upgrade k3s on Pi worker
+    ansible.builtin.shell: "k3sup join --k3s-version {{ k3s_version }} --server-host {{ primary_leader }} --host $(hostname).{{ domain }} --k3s-extra-args '{{ shared_k3s_args }} --node-label node.kubernetes.io/storage=storage'"
+    become: true
+
+  - name: Wait for node to be Ready
+    ansible.builtin.shell: "kubectl get node {{ inventory_hostname }} --no-headers | awk '{print $2}'"
+    register: node_status
+    until: "'Ready' in node_status.stdout"
+    retries: 30
+    delay: 10
+    changed_when: false
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Uncordon worker
+    ansible.builtin.shell: "kubectl uncordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Brief pause before next node
+    ansible.builtin.pause:
+      seconds: 30
+
+# Upgrade x86 GPU workers
+- hosts: x86-gpus
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon GPU worker
+    ansible.builtin.shell: "kubectl cordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Drain GPU worker
+    ansible.builtin.shell: "kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --timeout=300s"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Stop k3s
+    ansible.builtin.shell: "systemctl stop k3s-agent || systemctl stop k3s"
+    become: true
+    ignore_errors: true
+
+  - name: Upgrade k3s on x86 GPU worker
+    ansible.builtin.shell: "k3sup join --k3s-version {{ k3s_version }} --server-host {{ primary_leader }} --host $(hostname).{{ domain }} --k3s-extra-args '{{ k3s_server_args }} --node-label node.kubernetes.io/agpu=agpu --embedded-registry' --server"
+    become: true
+
+  - name: Wait for node to be Ready
+    ansible.builtin.shell: "kubectl get node {{ inventory_hostname }} --no-headers | awk '{print $2}'"
+    register: node_status
+    until: "'Ready' in node_status.stdout"
+    retries: 30
+    delay: 10
+    changed_when: false
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Uncordon GPU worker
+    ansible.builtin.shell: "kubectl uncordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Restart k3s to ensure GPU runtime config persists
+    ansible.builtin.shell: "systemctl restart k3s-agent || systemctl restart k3s"
+    become: true
+
+  - name: Brief pause before next node
+    ansible.builtin.pause:
+      seconds: 30
+
+# Upgrade ARM GPU workers
+- hosts: arm-gpus
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon ARM GPU worker
+    ansible.builtin.shell: "kubectl cordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Drain ARM GPU worker
+    ansible.builtin.shell: "kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --timeout=300s"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Stop k3s agent
+    ansible.builtin.shell: "systemctl stop k3s-agent"
+    become: true
+    ignore_errors: true
+
+  - name: Upgrade k3s on ARM GPU worker
+    ansible.builtin.shell: "k3sup join --k3s-version {{ k3s_version }} --server-host {{ primary_leader }} --host $(hostname).{{ domain }} --k3s-extra-args '{{ shared_k3s_args }} --node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=nvidia'"
+    become: true
+
+  - name: Wait for node to be Ready
+    ansible.builtin.shell: "kubectl get node {{ inventory_hostname }} --no-headers | awk '{print $2}'"
+    register: node_status
+    until: "'Ready' in node_status.stdout"
+    retries: 30
+    delay: 10
+    changed_when: false
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Uncordon ARM GPU worker
+    ansible.builtin.shell: "kubectl uncordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Brief pause before next node
+    ansible.builtin.pause:
+      seconds: 30
+
+# Upgrade vanilla x86 workers
+- hosts: x86
+  serial: 1
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Cordon x86 worker
+    ansible.builtin.shell: "kubectl cordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Drain x86 worker
+    ansible.builtin.shell: "kubectl drain {{ inventory_hostname }} --ignore-daemonsets --delete-emptydir-data --timeout=300s"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Stop k3s agent
+    ansible.builtin.shell: "systemctl stop k3s-agent"
+    become: true
+    ignore_errors: true
+
+  - name: Upgrade k3s on vanilla x86 worker
+    ansible.builtin.shell: "k3sup join --k3s-version {{ k3s_version }} --server-host {{ primary_leader }} --host $(hostname).{{ domain }} --k3s-extra-args '{{ shared_k3s_args }} --node-label svccontroller.k3s.cattle.io/enablelb=true --embedded-registry'"
+    become: true
+
+  - name: Wait for node to be Ready
+    ansible.builtin.shell: "kubectl get node {{ inventory_hostname }} --no-headers | awk '{print $2}'"
+    register: node_status
+    until: "'Ready' in node_status.stdout"
+    retries: 30
+    delay: 10
+    changed_when: false
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Uncordon x86 worker
+    ansible.builtin.shell: "kubectl uncordon {{ inventory_hostname }}"
+    delegate_to: "{{ groups['kube-leader'][0] }}"
+    become: true
+
+  - name: Brief pause before next node
+    ansible.builtin.pause:
+      seconds: 30
+
+# Post-upgrade verification
+- hosts: kube-leader
+  vars_files:
+    - k3s-vars.yaml
+  tasks:
+  - name: Verify all nodes show new version
+    ansible.builtin.shell: "kubectl get nodes -o wide"
+    register: final_nodes
+    changed_when: false
+    become: true
+
+  - name: Show final node status
+    debug:
+      msg: "{{ final_nodes.stdout_lines }}"
+
+  - name: Check for non-Running system pods
+    ansible.builtin.shell: "kubectl get pods -n kube-system --no-headers | grep -v Running | grep -v Completed || echo 'All system pods healthy'"
+    register: system_pods
+    changed_when: false
+    become: true
+
+  - name: Show system pod status
+    debug:
+      msg: "{{ system_pods.stdout_lines }}"
+
+  - name: Check ingress controller pods
+    ansible.builtin.shell: "kubectl get pods --all-namespaces | grep -E '(traefik|ingress)' || echo 'No ingress pods found'"
+    register: ingress_pods
+    changed_when: false
+    become: true
+
+  - name: Show ingress status
+    debug:
+      msg: "{{ ingress_pods.stdout_lines }}"
+
+  - name: Check Longhorn pods
+    ansible.builtin.shell: "kubectl get pods -n longhorn-system --no-headers | grep -v Running | grep -v Completed || echo 'All Longhorn pods healthy'"
+    register: longhorn_pods
+    changed_when: false
+    become: true
+
+  - name: Show Longhorn status
+    debug:
+      msg: "{{ longhorn_pods.stdout_lines }}"
+
+  - name: Upgrade complete
+    debug:
+      msg: "K3s cluster upgrade to {{ k3s_version }} complete. Review output above for any issues."

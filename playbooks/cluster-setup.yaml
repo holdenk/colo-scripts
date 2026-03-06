@@ -440,10 +440,11 @@
     kubernetes.core.helm_repository:
       name: traefik
       repo_url: "https://helm.traefik.io/traefik/"
-  - name: Add ingress-nginx chart
-    kubernetes.core.helm_repository:
-      name: ingress-nginx
-      repo_url: "https://kubernetes.github.io/ingress-nginx"
+  # nginx ingress removed - using k3s built-in Traefik instead
+  #- name: Add ingress-nginx chart
+  #  kubernetes.core.helm_repository:
+  #    name: ingress-nginx
+  #    repo_url: "https://kubernetes.github.io/ingress-nginx"
   - name: Add Rook Ceph chart
     kubernetes.core.helm_repository:
       name: rook-release
@@ -494,27 +495,9 @@
       chart_ref: cnpg/plugin-barman-cloud
       release_namespace: cnpg-system
       create_namespace: true
-  - name: Deploy nginx
-    kubernetes.core.helm:
-      name: ingress-nginx
-      chart_ref: ingress-nginx/ingress-nginx
-      release_namespace: nginx
-      chart_version: 4.13.4
-      create_namespace: true
-      wait: yes
-      values:
-        controller:
-          service:
-            loadBalancerIP: 10.42.0.200
-            externalTrafficPolicy: Local
-          watchIngressWithoutClass: true
-          allowSnippetAnnotations: true
-          ipFamilyPolicy: PreferDualStack
-          ipFamilies:
-            - IPv4
-            - IPv6
-          proxy-real-ip-cidr: "127.0.0.1/32,10.42.4.0/8"
-          maxmindLicenseKey: "{{maxmindkey}}"
+  # nginx ingress removed - using k3s built-in Traefik instead
+  # To clean up the old nginx deployment, run:
+  #   helm uninstall ingress-nginx -n nginx && kubectl delete ns nginx
   - name: Deploy cert manager
     kubernetes.core.helm:
       name: cert-manager
@@ -546,7 +529,7 @@
             solvers:
               - http01:
                   ingress:
-                    class: nginx
+                    class: traefik
   - name: Create prod certificate issuer
     community.kubernetes.k8s:
       definition:
@@ -567,77 +550,9 @@
             solvers:
               - http01:
                   ingress:
-                    class: nginx
-#  - name: Configure cert manager issuer
-#    ansible.builtin.shell: "kubectl apply -f /home/holden/repos/scalingpythonml/certificate-stuff/letsencrypt-issuer-staging.yaml"
-#  - name: Configure traefik-system ns
-#    community.kubernetes.k8s:
-#      kind: namespace
-#      name: traefik-system
-#      state: present
-#  - name: Configure traefik-certs volume
-#    community.kubernetes.k8s:
-#      definition:
-#        apiVersion: v1
-#        kind: PersistentVolumeClaim
-#        metadata:
-#          namespace: traefik-system
-#          name: traefik-certs
-#        spec:
-#          accessModes:
-#          - ReadWriteMany
-#          resources:
-#            requests:
-#              storage: 512m
-#          storageClassName: longhorn
-#      state: present
-#  - name: Deploy trafeik
-#    kubernetes.core.helm:
-#      name: traefik
-#      chart_ref: traefik/traefik
-#      release_namespace: traefik-system
-#      chart_version: v10.24.0
-#      create_namespace: true
-#      values:
-# To configure how we want things to go
-#        additionalArguments:
-#          - "--log.level=DEBUG"
-#          - "--providers.kubernetesIngress.ingressClass=traefik-cert-manager"
-#          - "--global.checknewversion"
-#          - "--global.sendanonymoususage"
-#          - "--entryPoints.traefik.address=:9000"
-#          - "--api.dashboard=true"
-#          - "--ping=true"
-# If we were to try and avoid cert-manager but it's being weird.
-#          - "--certificatesresolvers.le.acme.storage=/data/acme.json"
-#          - "--certificatesresolvers.le.acme.tlschallenge=true"
-#          - "--certificatesresolvers.le.acme.email=holden@pigscanfly.ca"
-#          - "--certificatesresolvers.le.acme.caServer=https://acme-staging-v02.api.letsencrypt.org/directory"
-#          - "--certificatesresolvers.le.acme.httpchallenge=true"
-#          - "--certificatesresolvers.le.acme.httpchallenge.entrypoint=web"
-#          - "--entryPoints.web.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-#          - "--entryPoints.websecure.forwardedHeaders.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-#          - "--entryPoints.web.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-#          - "--entryPoints.websecure.proxyProtocol.trustedIPs=127.0.0.1/32,10.42.4.0/8"
-#        persistence:
-#          enable: true
-#          accessMode: ReadWriteMany
-#          existingClaim: "traefik-certs"
-#          size: 512m
-#          path: "/data"
-#        ingressClass:
-#          enabled: true
-#          isDefaultClass: true
-#        service:
-#          spec:
-#            loadBalancerIP: 23.177.16.200
-#            externalTrafficPolicy: Local
-        # See https://community.traefik.io/t/traefik-v2-helm-v3-ingressroute-error-getting-validation-data-lets-encrypt/6262
-        # (needed for traefik to work with letsencrypt and storing certs in /data)
-#        podSecurityContext:
-#          fsGroup: null
-# traefik has been annoying me lately, lets try nginx for new bugs
-# longhorn gets sad in any NS other than longhorn-system :/
+                    class: traefik
+  # Using k3s built-in Traefik (re-enabled by removing --disable traefik from k3s args)
+  # longhorn gets sad in any NS other than longhorn-system :/
   - name: Deploy longhorn
     kubernetes.core.helm:
       name: longhorn
@@ -774,6 +689,17 @@
       api_version: rbac.authorization.k8s.io/v1
       kind: RoleBinding
       state: present
+  - name: Create Traefik basic-auth middleware for Longhorn
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: traefik.io/v1alpha1
+        kind: Middleware
+        metadata:
+          name: longhorn-basic-auth
+          namespace: longhorn-system
+        spec:
+          basicAuth:
+            secret: basic-auth
   - name: Create longhorn Ingress https
     community.kubernetes.k8s:
       definition:
@@ -783,21 +709,12 @@
           name: longhorn-ingress
           namespace: longhorn-system
           annotations:
-            # nginx
-            nginx.ingress.kubernetes.io/auth-type: basic
-            nginx.ingress.kubernetes.io/auth-secret: basic-auth
+            traefik.ingress.kubernetes.io/router.middlewares: longhorn-system-longhorn-basic-auth@kubernetescrd
 #            cert-manager.io/cluster-issuer: letsencrypt
 #            cert-manager.io/issue-temporary-certificate: "true"
 #            acme.cert-manager.io/http01-edit-in-place: "true"
-            nginx.ingress.kubernetes.io/auth-realm: 'Authentication Required '
-            nginx.ingress.kubernetes.io/proxy-body-size: 10000m
-#            nginx.ingress.kubernetes.io/configuration-snippet: |
-#              proxy_set_header "Host" "$host";
-#              real_ip_header X-Forwarded-For;
-#              proxy_set_header  "X-Forwarded-For" "$proxy_add_x_forwarded_for";
-#              real_ip_recursive on;
         spec:
-          ingressClassName: nginx
+          ingressClassName: traefik
 #          tls:
 #          - hosts:
 #              - longhorn.pigscanfly.ca
