@@ -2,5 +2,11 @@
 roles:
   - name: mrlesmithjr.frr
   - name: geerlingguy.mysql
-  - name: community.kubernetes
   - name: GROG.reboot
+collections:
+  - name: community.kubernetes
+  - name: kubernetes.core
+  - name: community.postgresql
+  - name: community.mysql
+  - name: community.general
+  - name: ansible.posix

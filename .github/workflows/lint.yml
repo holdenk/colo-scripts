@@ -24,8 +24,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install 'ansible-lint>=25.1,<26' ansible
-          ansible-galaxy install --ignore-errors -r requirements.yaml
-          ansible-galaxy collection install community.kubernetes kubernetes.core community.postgresql community.mysql community.general ansible.posix
+          ansible-galaxy role install --ignore-errors -r requirements.yaml
+          ansible-galaxy collection install -r requirements.yaml
       - name: Run ansible-lint
         run: ansible-lint
 
@@ -36,8 +36,8 @@ jobs:
       - name: Install dependencies
         run: |
           pip install ansible
-          ansible-galaxy install --ignore-errors -r requirements.yaml
-          ansible-galaxy collection install community.kubernetes kubernetes.core community.postgresql community.mysql community.general ansible.posix
+          ansible-galaxy role install --ignore-errors -r requirements.yaml
+          ansible-galaxy collection install -r requirements.yaml
       - name: Syntax check playbooks
         run: |
           for playbook in \
