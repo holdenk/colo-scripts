@@ -3,10 +3,10 @@
   tasks:
   - name: Update all host/vm packages
     ansible.builtin.apt:
-            update_cache: true
-            cache_valid_time: 3600
-            name: "*"
-            state: latest
+      update_cache: true
+      cache_valid_time: 3600
+      name: "*"
+      state: latest
     become: true
 - hosts: all
   become: true

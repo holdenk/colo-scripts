@@ -1,0 +1,51 @@
+---
+name: Lint
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [master, main]
+
+jobs:
+  yamllint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install yamllint
+        run: pip install yamllint
+      - name: Run yamllint
+        run: yamllint .
+
+  ansible-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          pip install 'ansible-lint>=25.1,<26' ansible
+          ansible-galaxy role install --ignore-errors -r requirements.yaml
+          ansible-galaxy collection install -r requirements.yaml
+      - name: Run ansible-lint
+        run: ansible-lint
+
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          pip install ansible
+          ansible-galaxy role install --ignore-errors -r requirements.yaml
+          ansible-galaxy collection install -r requirements.yaml
+      - name: Syntax check playbooks
+        run: |
+          for playbook in \
+            playbooks/update.yaml \
+            playbooks/storage.yaml \
+            playbooks/plex.yaml \
+            cleanupbooks/k3sremove.yaml \
+            cleanupbooks/rookcleanup.yaml; do
+            echo "Checking $playbook..."
+            ansible-playbook --syntax-check -i hosts.yaml "$playbook"
+          done

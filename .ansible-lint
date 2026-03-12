@@ -1,0 +1,32 @@
+---
+skip_list:
+  - yaml[line-length]
+  - no-changed-when
+  - command-instead-of-shell
+  - command-instead-of-module
+  - risky-shell-pipe
+  - ignore-errors
+  - no-free-form
+  - name[missing]
+  - name[play]
+  - jinja[spacing]
+  - fqcn[action-core]
+  - fqcn[action]
+  - fqcn[canonical]
+  - package-latest
+  - risky-file-permissions
+  - key-order[task]
+  - partial-become[task]
+  - literal-compare
+warn_list:
+  - schema[meta]
+  - name[casing]
+exclude_paths:
+  - .git/
+  - passwd.yml
+  - rook-ceph-cluster.yaml
+  - metallb.yaml
+  - metallb-config.yaml
+  - resources.yaml
+  - playbooks/frr-shared-vars.yaml
+  - playbooks/k3s-vars.yaml

@@ -24,7 +24,7 @@
     ansible.builtin.lineinfile:
       path: /etc/fstab
       line: "{{data_dir}}/mariadb /var/lib/mysql none defaults,bind 0 0"
-  - name: Add the mariadb mount directory to fstab
+  - name: Add the postgresql mount directory to fstab
     ansible.builtin.lineinfile:
       path: /etc/fstab
       line: "{{data_dir}}/postgresql /var/lib/postgresql none defaults,bind 0 0"
@@ -50,9 +50,6 @@
         - mariadb-backup
       state: latest
       update_cache: true
-#  - name: Upgrade cluster just incase
-#    ansible.builtin.shell: "pg_upgradecluster"
-#    become: yes
   - name: Install psycopg2 python package
     pip:
       name: psycopg2
@@ -93,7 +90,7 @@
 - hosts: db-leader
   become: yes
   tasks:
-#postgres
+  # postgres
   - name: Start database
     systemd:
       state: started
@@ -114,36 +111,18 @@
       db: postgres
     become_user: postgres
     become: yes
-  - name: Configure wal_level parameter
+  - name: Configure PostgreSQL WAL settings
     postgresql_set:
-      name: wal_level
-      value: 'replica'
+      name: "{{ item.name }}"
+      value: "{{ item.value }}"
     become_user: postgres
     become: yes
-  - name: Configure wal_log_hints parameter
-    postgresql_set:
-      name: wal_log_hints
-      value: 'on'
-    become_user: postgres
-    become: yes
-  - name: Configure max_wal_senders parameter
-    postgresql_set:
-      name: max_wal_senders
-      value: '8'
-    become_user: postgres
-    become: yes
-  - name: Configure wal_keep_size parameter (in MB)
-    postgresql_set:
-      name: wal_keep_size
-      value: '500'
-    become_user: postgres
-    become: yes
-  - name: Configure hot_standby parameter
-    postgresql_set:
-      name: hot_standby
-      value: 'on'
-    become_user: postgres
-    become: yes
+    loop:
+      - {name: wal_level, value: 'replica'}
+      - {name: wal_log_hints, value: 'on'}
+      - {name: max_wal_senders, value: '8'}
+      - {name: wal_keep_size, value: '500'}
+      - {name: hot_standby, value: 'on'}
   - name: Enable replication user to login but only from our IP range.
     blockinfile:
       path: /etc/postgresql/14/main/pg_hba.conf
@@ -170,7 +149,7 @@
       priv: "ALL"
     become_user: postgres
     become: yes
-#mysql
+  # mysql
   - name: Create mysql databases
     community.mysql.mysql_db:
       name:
@@ -190,55 +169,24 @@
       host_all: yes
       state: absent
       login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create pcfweb
+  - name: Create MySQL application users
     community.mysql.mysql_user:
       state: present
-      name: pcfweb
-      password: "{{pcfweb_db_pw}}"
-      host: "%"
-      priv: "pcf-web.*:ALL"
+      name: "{{ item.name }}"
+      password: "{{ item.password }}"
+      host: "{{ item.host | default('%') }}"
+      priv: "{{ item.priv }}"
       login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create opengreeniotuser
-    community.mysql.mysql_user:
-      state: present
-      name: opengreeniot
-      password: "{{opengreeniot_db_pw}}"
-      host: "%"
-      priv: "opengreeniot.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create blesta
-    community.mysql.mysql_user:
-      state: present
-      name: blesta
-      password: "{{blesta_db_pw}}"
-      host: "%"
-      priv: "blesta.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create cacti
-    community.mysql.mysql_user:
-      state: present
-      name: cacti
-      password: "{{cacti_db_pw}}"
-      host: "%"
-      priv: "cacti.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create opengreeniotuser
-    community.mysql.mysql_user:
-      state: present
-      name: spacebeaver
-      password: "{{spacebeaver_db_pw}}"
-      host: "%"
-      priv: "spacebeaver%.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create fuckhealthinsurance
-    community.mysql.mysql_user:
-      state: present
-      name: fuckhealthinsurance
-      password: "{{fuckhealthinsurance_db_pw}}"
-      host: "%"
-      priv: "fuckhealthinsurance%.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create fuckhealthinsurance
+    loop:
+      - {name: pcfweb, password: "{{pcfweb_db_pw}}", priv: "pcf-web.*:ALL"}
+      - {name: opengreeniot, password: "{{opengreeniot_db_pw}}", priv: "opengreeniot.*:ALL"}
+      - {name: blesta, password: "{{blesta_db_pw}}", priv: "blesta.*:ALL"}
+      - {name: cacti, password: "{{cacti_db_pw}}", priv: "cacti.*:ALL"}
+      - {name: spacebeaver, password: "{{spacebeaver_db_pw}}", priv: "spacebeaver%.*:ALL"}
+      - {name: fuckhealthinsurance, password: "{{fuckhealthinsurance_db_pw}}", priv: "fuckhealthinsurance%.*:ALL"}
+      - {name: iceberg, password: "{{iceberg_db_pw}}", priv: "metastore.*:ALL"}
+      - {name: holden, password: "{{mysql_user_pw}}", host: localhost, priv: "*.*:ALL"}
+  - name: Create marcus read-only user
     community.mysql.mysql_user:
       state: present
       name: marcus
@@ -247,42 +195,17 @@
       priv: "fuckhealthinsurance%.*:SELECT"
       login_unix_socket: /var/run/mysqld/mysqld.sock
       login_host: 100.80.134.19
-  - name: Create iceberg user
-    community.mysql.mysql_user:
-      state: present
-      name: iceberg
-      password: "{{iceberg_db_pw}}"
-      host: "%"
-      priv: "metastore.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create holden user
-    community.mysql.mysql_user:
-      name: holden
-      host: "localhost"
-      password: "{{mysql_user_pw}}"
-      priv: "*.*:ALL"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create repl user
+  - name: Create replication users
     community.mysql.mysql_user:
       name: magic-replication-user
-      host: "%"
+      host: "{{ item }}"
       password: "{{mysql_replication_pw}}"
       priv: "*.*:REPLICATION SLAVE"
       login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create repl user
-    community.mysql.mysql_user:
-      name: magic-replication-user
-      host: "jumba.pigscanfly.ca"
-      password: "{{mysql_replication_pw}}"
-      priv: "*.*:REPLICATION SLAVE"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
-  - name: Create repl user
-    community.mysql.mysql_user:
-      name: magic-replication-user
-      host: "david.pigscanfly.ca"
-      password: "{{mysql_replication_pw}}"
-      priv: "*.*:REPLICATION SLAVE"
-      login_unix_socket: /var/run/mysqld/mysqld.sock
+    loop:
+      - "%"
+      - "jumba.pigscanfly.ca"
+      - "david.pigscanfly.ca"
   - name: create temporary backup directory on master
     tempfile:
       state: directory
@@ -299,7 +222,7 @@
       format: gz
       owner: root
       group: root
-      mode: 0600
+      mode: "0600"
       remove: true
   - name: download database dump from master
     fetch:
@@ -317,7 +240,7 @@
       service:
         name: mysql
         state: stopped
-    - name: uplaod db dump
+    - name: upload db dump
       copy:
         src: "/tmp/dump.tar.gz"
         dest: "/tmp/"
@@ -332,7 +255,7 @@
         state: directory
         owner: mysql
         group: mysql
-        mode: 0750
+        mode: "0750"
       ignore_errors: true
     - name: create /tmp/mysql-dump
       file:
@@ -380,25 +303,13 @@
         master_host: nani.pigscanfly.ca
         login_unix_socket: /var/run/mysqld/mysqld.sock
         connection_name: master-1
-# This _might_ fail in which case just re-run it
+    # This _might_ fail in which case just re-run it
     - name: Run start replica and fail the task on errors
       community.mysql.mysql_replication:
         mode: startreplica
         connection_name: master-1
         fail_on_error: yes
         login_unix_socket: /var/run/mysqld/mysqld.sock
-# TODO: set up postgres replication
-#postgres
-#  - name: pgpass for non interactive logins to the other node
-#    blockinfile:
-#      path: /var/lib/pgsql/.pgpass
-#      create: yes
-#      mode: 0600
-#      block: |
-#        # hostname:port:database:username:password
-#        {% for host in groups['database'] %}
-#        {{ hostvars[host]['inventory_hostname'] + ':5432:replication:' + repl_user + ':' + repl_passwd}}
-#        {% endfor %}
     - name: Stop database
       systemd:
         state: stopped
@@ -408,10 +319,10 @@
       file:
         state: absent
         path: "/var/lib/postgresql/14/main"
-    - name: Setup a pgpas for initial repl
+    - name: Setup a pgpass for initial replication
       blockinfile:
         create: yes
-        mode: 0600
+        mode: "0600"
         path: ~/.pgpass
         block: |
           {{ hostvars[groups['db-leader'][0]]['inventory_hostname'] }}:5432:replication:{{repl_user}}:{{repl_passwd}}

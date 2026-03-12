@@ -1,0 +1,51 @@
+---
+# Shared FRR prefix lists used by both router.yaml and route-server.yaml
+frr_prefix_list:
+  Bad_IPs:
+    05 permit:
+      prefix: 192.168.88.0/24
+      match: ge 32
+    10 permit:
+      prefix: 172.16.0.0/16
+      match: le 32
+  DefaultOnlyV4:
+    10 permit:
+      prefix: 0.0.0.0/0
+    20 deny:
+      prefix: any
+  MetallbV4:
+    10 permit:
+      prefix: any
+  AnnounceV4:
+    10 permit:
+      prefix: 23.177.16.0/24
+    20 permit:
+      prefix: 209.209.73.0/24
+    30 deny:
+      prefix: any
+  AcceptMostV4:
+    10 deny:
+      prefix: "0.0.0.0/0"
+    20 permit:
+      prefix: any
+frr_prefix_list_v6:
+  Bad_IPs:
+    05 permit:
+      prefix: 1234:5678::/32
+      match: ge 128
+  AcceptMostV6:
+    10 deny:
+      prefix: "::/0"
+    20 permit:
+      prefix: any
+  AnnounceV6:
+    05 permit:
+      prefix: 2602:FCB1::/36
+    10 deny:
+      prefix: any
+  DefaultOnlyV6:
+    40 deny:
+      prefix: any
+  MetallbV6:
+    10 permit:
+      prefix: any

@@ -49,7 +49,7 @@
           name: ntpsec
           state: present
         register: ntpsec_result
-        ignore_errors: yes       # OK if the package doesn't exist
+        ignore_errors: yes
 
       - name: Install ntp (fallback for older distros)
         apt:
@@ -77,7 +77,6 @@
       dest: /etc/apt/keyrings/docker.asc
       mode: "0644"
     become: yes
-
   - name: Add Docker apt repository (modern keyring syntax)
     copy:
       dest: /etc/apt/sources.list.d/docker-modern.list
@@ -85,7 +84,6 @@
       content: |
         deb [signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/{{ ansible_distribution | lower }} {{ ansible_distribution_release }} stable
     become: yes
-
   - name: Update apt cache
     apt:
       update_cache: yes
@@ -113,7 +111,7 @@ defaults {
 '
       dest: /etc/multipath.conf
     become: true
-  - name: Restart mutlipath
+  - name: Restart multipath
     ansible.builtin.shell: "systemctl restart multipathd.service || echo \"no multipath yay\""
     become: true
 - hosts: kube-leader
@@ -121,43 +119,12 @@ defaults {
     - k3s-vars.yaml
   tasks:
   - name: Install docker
-    apt:
-      pkg:
-        - containerd.io
-        - docker-ce
-        - docker-ce-cli
-    become: yes
+    ansible.builtin.include_tasks: tasks/install-docker.yaml
   - name: Install k3s leader
     ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '{{k3s_server_args}}' --cluster"
-#    ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
-#  - name: Check that k3s node has come up
-#    ansible.builtin.shell: "kubectl get nodes || (sleep 360 && kubectl get nodes) || (sleep 360 && kubectl get nodes)"
-#    become: true
-
-#  - name: Make custom config.toml.tmpl file since config.toml is overwritten automatically.
-#    copy:
-#      remote_src: yes
-#      src: /var/lib/rancher/k3s/agent/etc/containerd/config.toml
-#      dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-#      force: yes
-#    become: true
-#  - name: Disable unprivliged ports - https://github.com/k3s-io/k3s/issues/5912
-#    replace:
-#      regexp: '^(.*)enable_unprivileged_ports = true(.*)$' 
-#      replace: '\1enable_unprivileged_ports = false'
-#      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-#      unsafe_writes: true
-#    become: true
-#  - name: Disable unprivliged ports - https://github.com/k3s-io/k3s/issues/5912
-#    replace:
-#      regexp: '^(.*)enable_unprivileged_icmp = true(.*)$' 
-#      replace: '\1enable_unprivileged_icmp = false'
-#      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-#      unsafe_writes: true
-#    become: true
   - name: Disable proxy on leader
     ansible.builtin.copy:
       content: '
@@ -168,28 +135,18 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
   - name: Patch K3s local-storage manifest to include encrypted path
     ansible.builtin.replace:
       path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
-      # Look for the paths array and swap it for our expanded version
       regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
       replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
       backup: yes
     become: true
-#  - name: Restart k3s
-#    ansible.builtin.shell: "service k3s restart && sleep 3"
-#    become: true
 - hosts: leader-backup
   vars_files:
     - k3s-vars.yaml
   tasks:
   - name: Install docker
-    apt:
-      pkg:
-        - containerd.io
-        - docker-ce
-        - docker-ce-cli
-    become: yes
+    ansible.builtin.include_tasks: tasks/install-docker.yaml
   - name: Install k3s backups
     ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label svccontroller.k3s.cattle.io/enablelb=true  --embedded-registry' --server-host {{primary_leader}} --server"
-#    ansible.builtin.shell: "k3sup install --k3s-version {{k3s_version}} --host $(hostname).{{domain}} --context k3s --k3s-extra-args '--disable servicelb --disable traefik --cluster-cidr 10.42.0.0/16,fd00:a0::/64 --service-cidr 10.43.0.0/16,fd00:a1::/108 --node-ip 23.177.16.21,2602:fcb1::1337:21 --flannel-ipv6-masq'"
     args:
       creates: /usr/local/bin/k3s-uninstall.sh
     become: true
@@ -203,16 +160,11 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
   - name: Patch K3s local-storage manifest to include encrypted path
     ansible.builtin.replace:
       path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
-      # Look for the paths array and swap it for our expanded version
       regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
       replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
       backup: yes
     register: k3s_manifest_patch
     become: true
-#  - name: Restart k3s
-#    ansible.builtin.shell: "service k3s restart && sleep 3"
-#    become: true
-#    throttle: 1
 - hosts: pis
   vars_files:
     - k3s-vars.yaml
@@ -231,12 +183,7 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     - k3s-vars.yaml
   tasks:
   - name: Install docker and friends
-    apt:
-      pkg:
-        - docker-ce
-        - docker-ce-cli
-        - containerd.io
-    become: yes
+    ansible.builtin.include_tasks: tasks/install-docker.yaml
 - hosts: arm-gpus
   vars_files:
     - k3s-vars.yaml
@@ -267,27 +214,23 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     register: nvidia_ctk_check
     failed_when: false
     changed_when: false
-
   - name: Install nvidia-container-toolkit if available
     apt:
       name: nvidia-container-toolkit
       state: present
     when: nvidia_ctk_check.rc == 0
     become: yes
-
   - name: Check if nv docker2 package is available
     command: apt-cache search nvidia-docker2
     register: nv_docker2
     failed_when: false
     changed_when: false
-
-  - name: Install nvidia-container-toolkit if available
+  - name: Install nvidia-docker2 if available
     apt:
       name: nvidia-docker2
       state: present
     when: nv_docker2.rc == 0
     become: yes
-
   - name: Install k3s workers with gpus
     ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label node.kubernetes.io/agpu=agpu  --embedded-registry' --server"
     args:
@@ -300,33 +243,19 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
       dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
       force: yes
     become: true
-  - name: Add plugins to conatinerd if not present
+  - name: Add plugins to containerd if not present
     ansible.builtin.lineinfile:
       line: '[plugins."io.containerd.grpc.v1.cri".containerd]'
       unsafe_writes: true
       path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
     become: true
-  - name: Setup conatinerd to use the nvidia runtime
+  - name: Setup containerd to use the nvidia runtime
     ansible.builtin.lineinfile:
       insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd.containerd]'
       line: 'default_runtime_name = "nvidia"'
       unsafe_writes: true
       path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
     become: true
-#  - name: Disable unprivliged ports - https://github.com/k3s-io/k3s/issues/5912
-#    replace:
-#      regexp: '^(.*)enable_unprivileged_ports = true(.*)$' 
-#      replace: '\1enable_unprivileged_ports = false'
-#      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-#      unsafe_writes: true
-#    become: true
-#  - name: Disable unprivliged ports - https://github.com/k3s-io/k3s/issues/5912
-#    replace:
-#      regexp: '^(.*)enable_unprivileged_icmp = true(.*)$' 
-#      replace: '\1enable_unprivileged_icmp = false'
-#      path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
-#      unsafe_writes: true
-#    become: true
   - name: Restart k3s workers to pickup new config
     ansible.builtin.shell: "systemctl restart k3s-agent || systemctl restart k3s"
     become: true
@@ -335,7 +264,15 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     - k3s-vars.yaml
   tasks:
   - name: Install on AMD GPU hosts
-    ansible.builtin.shell: "git clone https://github.com/abuccts/rocm-container-runtime; cd rocm-container-runtime; bash install.sh; k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{shared_k3s_args}} --node-label svccontroller.k3s.cattle.io/enablelb=true --node-label node.kubernetes.io/gpu=amd'"
+    ansible.builtin.shell: >-
+      git clone https://github.com/abuccts/rocm-container-runtime;
+      cd rocm-container-runtime; bash install.sh;
+      k3sup join --k3s-version {{k3s_version}}
+      --server-host {{primary_leader}}
+      --host $(hostname).{{domain}}
+      --k3s-extra-args '{{shared_k3s_args}}
+      --node-label svccontroller.k3s.cattle.io/enablelb=true
+      --node-label node.kubernetes.io/gpu=amd'
     args:
       creates: /usr/local/bin/k3s-agent-uninstall.sh
     become: true
@@ -346,13 +283,13 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
       dest: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
       force: yes
     become: true
-  - name: Add plugins to conatinerd if not present
+  - name: Add plugins to containerd if not present
     ansible.builtin.lineinfile:
       line: '[plugins."io.containerd.grpc.v1.cri".containerd]'
       unsafe_writes: true
       path: /var/lib/rancher/k3s/agent/etc/containerd/config.toml.tmpl
     become: true
-  - name: Setup conatinerd to use the rocm runtime
+  - name: Setup containerd to use the rocm runtime
     ansible.builtin.lineinfile:
       insertafter: '[plugins."io.containerd.grpc.v1.cri".containerd]'
       line: 'default_runtime_name = "rocm"'
@@ -406,7 +343,7 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
               auth:
                 username: {{ k3s_docker_username }}
                 password: {{ k3s_docker_pw }}
-                
+
     - name: Restart k3s
       ansible.builtin.shell: "service k3s restart && sleep 30"
       throttle: 1
