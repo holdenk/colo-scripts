@@ -1,0 +1,29 @@
+---
+# Shared ecryptfs settings for /db/encrypted, used by:
+#   * playbooks/ecrypt.yaml        -- first-time setup (packages, fstab, mount)
+#   * playbooks/ecrypt-ensure.yaml -- idempotent mount check, run from cron
+#
+# The live mount options embed the vault-provided passphrase (ecrypt_pw), which
+# is why the fstab entry is intentionally "noauto": the volume must never be
+# mounted at boot without the key. Something (ecrypt.yaml or the cron-driven
+# ecrypt-ensure.yaml) has to mount it explicitly once a node comes up.
+ecryptfs_backing_dir: /db/encrypted-backing
+ecryptfs_mount_dir: /db/encrypted
+ecryptfs_fstype: ecryptfs
+
+ecryptfs_modules:
+  - ecryptfs
+
+# Options common to both the fstab entry and the live mount.
+ecryptfs_common_opts: >-
+  ecryptfs_cipher=aes,
+  ecryptfs_key_bytes=16,
+  ecryptfs_passthrough=n,
+  ecryptfs_enable_filename_crypto=n,
+  no_sig_cache
+
+# fstab entry: noauto so it is never auto-mounted without the passphrase.
+ecryptfs_fstab_opts: "noauto,{{ ecryptfs_common_opts | regex_replace('\\s+', '') }}"
+
+# Live mount: prepend the passphrase (from passwd.yml vault: ecrypt_pw).
+ecryptfs_mount_opts: "key=passphrase:passphrase_passwd={{ ecrypt_pw }},{{ ecryptfs_common_opts | regex_replace('\\s+', '') }}"

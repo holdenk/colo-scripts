@@ -4,14 +4,10 @@
   become: true
   gather_facts: true
 
+  vars_files:
+    - ecrypt-vars.yaml
+
   vars:
-    ecryptfs_backing_dir: /db/encrypted-backing
-    ecryptfs_mount_dir: /db/encrypted
-    ecryptfs_fstype: ecryptfs
-
-    ecryptfs_modules:
-      - ecryptfs
-
     # Basic package mapping; tweak if you have oddball distros
     ecryptfs_package_map:
       Debian: ["ecryptfs-utils"]
@@ -76,37 +72,10 @@
       changed_when: false
 
     # ------------------------------------------------------------------
-    # First-time / not-mounted path: add passphrase, get sig, set up fstab,
-    # and mount using the sig (non-interactive).
+    # First-time / not-mounted path: ensure the (noauto) fstab entry and
+    # mount using the passphrase (non-interactive). Option strings live in
+    # ecrypt-vars.yaml so this and ecrypt-ensure.yaml can never drift.
     # ------------------------------------------------------------------
-
-
-    - name: Build ecryptfs option strings (fstab + runtime)
-      ansible.builtin.set_fact:
-        # We DO NOT want this to mount at boot -> noauto
-        ecryptfs_fstab_opts: >-
-          noauto,
-          ecryptfs_cipher=aes,
-          ecryptfs_key_bytes=16,
-          ecryptfs_passthrough=n,
-          ecryptfs_enable_filename_crypto=n,
-          no_sig_cache
-        # Runtime mount options (no noauto)
-        ecryptfs_mount_opts: >-
-          key=passphrase:passphrase_passwd={{ ecrypt_pw }},
-          ecryptfs_cipher=aes,
-          ecryptfs_key_bytes=16,
-          ecryptfs_passthrough=n,
-          ecryptfs_enable_filename_crypto=n,
-          no_sig_cache
-      when: ecryptfs_mountpoint_check.rc != 0
-
-    - name: Normalize ecryptfs option strings (strip spaces)
-      ansible.builtin.set_fact:
-        ecryptfs_fstab_opts: "{{ ecryptfs_fstab_opts | regex_replace('\\s+', '') }}"
-        ecryptfs_mount_opts: "{{ ecryptfs_mount_opts | regex_replace('\\s+', '') }}"
-      when: ecryptfs_mountpoint_check.rc != 0
-
     - name: Ensure ecryptfs fstab entry (with noauto) is present
       ansible.builtin.mount:
         src: "{{ ecryptfs_backing_dir }}"
@@ -121,3 +90,5 @@
         mount -t ecryptfs {{ ecryptfs_backing_dir }} {{ ecryptfs_mount_dir }}
         -o {{ ecryptfs_mount_opts }}
       when: ecryptfs_mountpoint_check.rc != 0
+      register: ecryptfs_mount_result
+      changed_when: ecryptfs_mount_result.rc == 0

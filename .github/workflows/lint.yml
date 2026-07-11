@@ -44,6 +44,9 @@ jobs:
             playbooks/update.yaml \
             playbooks/storage.yaml \
             playbooks/plex.yaml \
+            playbooks/ecrypt.yaml \
+            playbooks/ecrypt-ensure.yaml \
+            playbooks/ecrypt-cron.yaml \
             cleanupbooks/k3sremove.yaml \
             cleanupbooks/rookcleanup.yaml; do
             echo "Checking $playbook..."

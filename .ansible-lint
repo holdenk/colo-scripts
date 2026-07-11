@@ -30,3 +30,4 @@ exclude_paths:
   - resources.yaml
   - playbooks/frr-shared-vars.yaml
   - playbooks/k3s-vars.yaml
+  - playbooks/ecrypt-vars.yaml
