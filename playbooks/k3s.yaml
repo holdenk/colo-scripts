@@ -319,17 +319,43 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
   vars_files:
     - k3s-vars.yaml
   tasks:
+  - name: Setup nv container toolkit GPG keyring
+    # become already gives us root, so no nested sudo (which can hang on a
+    # password prompt). --yes/--batch stop gpg from prompting to overwrite an
+    # existing keyring, and the curl timeouts stop us hanging if the mirror is
+    # unreachable. Write to a temp file and mv into place so a failed download
+    # never leaves a half-written keyring that the creates: guard would skip.
+    ansible.builtin.shell: >-
+      set -o pipefail;
+      curl -fsSL --connect-timeout 15 --max-time 120
+      https://nvidia.github.io/libnvidia-container/gpgkey
+      | gpg --yes --batch --dearmor
+      -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg.tmp
+      && mv /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg.tmp
+      /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+    args:
+      creates: /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+      executable: /bin/bash
+    become: yes
   - name: Setup nv container toolkit apt repo
-    shell:
-      curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | sudo gpg --dearmor -o /usr/share/keyrings/nvidia-container-toolkit-keyring.gpg \
-      && curl -s -L https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | \
-      sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g' | \
-      tee /etc/apt/sources.list.d/nvidia-container-toolkit.list
+    ansible.builtin.shell: >-
+      set -o pipefail;
+      curl -fsSL --connect-timeout 15 --max-time 120
+      https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list
+      | sed 's#deb https://#deb [signed-by=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg] https://#g'
+      > /etc/apt/sources.list.d/nvidia-container-toolkit.list.tmp
+      && mv /etc/apt/sources.list.d/nvidia-container-toolkit.list.tmp
+      /etc/apt/sources.list.d/nvidia-container-toolkit.list
     args:
       creates: /etc/apt/sources.list.d/nvidia-container-toolkit.list
+      executable: /bin/bash
+    become: yes
+  - name: Update apt cache after adding nvidia repo
+    apt:
+      update_cache: true
     become: yes
   - name: Check if nvidia-container-toolkit package is available
-    command: apt-cache search nvidia-container-toolkit
+    ansible.builtin.command: apt-cache policy nvidia-container-toolkit
     register: nvidia_ctk_check
     failed_when: false
     changed_when: false
@@ -337,10 +363,13 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     apt:
       name: nvidia-container-toolkit
       state: present
-    when: nvidia_ctk_check.rc == 0
+      lock_timeout: 120
+    when:
+      - "'Candidate:' in nvidia_ctk_check.stdout"
+      - "'Candidate: (none)' not in nvidia_ctk_check.stdout"
     become: yes
   - name: Check if nv docker2 package is available
-    command: apt-cache search nvidia-docker2
+    ansible.builtin.command: apt-cache policy nvidia-docker2
     register: nv_docker2
     failed_when: false
     changed_when: false
@@ -348,7 +377,10 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
     apt:
       name: nvidia-docker2
       state: present
-    when: nv_docker2.rc == 0
+      lock_timeout: 120
+    when:
+      - "'Candidate:' in nv_docker2.stdout"
+      - "'Candidate: (none)' not in nv_docker2.stdout"
     become: yes
   - name: Install k3s workers with gpus
     ansible.builtin.shell: "k3sup join --k3s-version {{k3s_version}} --server-host {{primary_leader}} --host $(hostname).{{domain}} --k3s-extra-args '{{k3s_server_args}} --node-label node.kubernetes.io/agpu=agpu  --embedded-registry' --server"
