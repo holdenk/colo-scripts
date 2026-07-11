@@ -1,0 +1,175 @@
+---
+# Prometheus + minimal alerting for the k3s cluster.
+#
+# This deploys the community kube-prometheus-stack Helm chart, which bundles:
+#   - Prometheus (via the prometheus-operator)
+#   - Alertmanager (wired up to email holden@pigscanfly.ca by default)
+#   - node-exporter + kube-state-metrics (the metrics sources)
+#   - Grafana (dashboards, exposed at https://grafana.pigscanfly.ca)
+#
+# Persistence uses the existing Longhorn storage class, and the Grafana
+# ingress reuses the cluster's nginx + cert-manager (letsencrypt) setup, so
+# this follows the same conventions as the rest of cluster-setup.yaml.
+#
+# "Minimal alerting" means: the stack's sensible default Kubernetes/node
+# alert rules PLUS a small curated PrometheusRule (see the bottom of this
+# file) covering the handful of homelab failures you actually want a page
+# for -- a target/instance going down, a node running out of memory, and a
+# node running out of disk.
+#
+# Optional overrides (pass via --extra-vars '@passwd.yml' like setup.sh, or
+# -e on the command line). All have safe defaults so a plain run works:
+#   grafana_admin_password      Grafana admin login password
+#   alertmanager_email_to       where alerts are emailed (default holden@)
+#   alertmanager_smtp_host      SMTP smarthost host:port (STARTTLS / 587)
+#   alertmanager_smtp_from      From address on alert emails
+#   alertmanager_smtp_user      SMTP auth username (sendgrid uses "apikey")
+#   alertmanager_smtp_password  SMTP auth password / API key
+#
+# Run with:
+#   ansible-playbook -i hosts.yaml --extra-vars '@passwd.yml' \
+#     playbooks/monitoring.yaml
+- hosts: localhost
+  vars:
+    monitoring_namespace: monitoring
+    grafana_host: grafana.pigscanfly.ca
+  tasks:
+  - name: Add prometheus-community Helm repo
+    kubernetes.core.helm_repository:
+      name: prometheus-community
+      repo_url: "https://prometheus-community.github.io/helm-charts"
+      force_update: true
+  - name: Create monitoring namespace
+    kubernetes.core.k8s:
+      name: "{{ monitoring_namespace }}"
+      api_version: v1
+      kind: Namespace
+      state: present
+  - name: Deploy kube-prometheus-stack (Prometheus, Alertmanager, Grafana)
+    kubernetes.core.helm:
+      name: kube-prometheus-stack
+      chart_ref: prometheus-community/kube-prometheus-stack
+      release_namespace: "{{ monitoring_namespace }}"
+      create_namespace: false
+      wait: yes
+      wait_timeout: 600s
+      values:
+        # Ship the standard Kubernetes/node alert rules. This is the sensible
+        # baseline "minimal" alerting; our extra rules are added below.
+        defaultRules:
+          create: true
+        prometheus:
+          prometheusSpec:
+            retention: 15d
+            # Pick up every ServiceMonitor/PodMonitor/PrometheusRule in the
+            # cluster, not just ones tagged with this Helm release. Lets other
+            # namespaces expose metrics and rules without extra wiring.
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            probeSelectorNilUsesHelmValues: false
+            scrapeConfigSelectorNilUsesHelmValues: false
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: longhorn
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 20Gi
+        alertmanager:
+          alertmanagerSpec:
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: longhorn
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 5Gi
+          config:
+            global:
+              resolve_timeout: 5m
+              smtp_smarthost: "{{ alertmanager_smtp_host | default('smtp.sendgrid.net:587') }}"
+              smtp_from: "{{ alertmanager_smtp_from | default('alertmanager@pigscanfly.ca') }}"
+              smtp_auth_username: "{{ alertmanager_smtp_user | default('apikey') }}"
+              smtp_auth_password: "{{ alertmanager_smtp_password | default('') }}"
+              smtp_require_tls: true
+            route:
+              group_by: ['alertname', 'namespace']
+              group_wait: 30s
+              group_interval: 5m
+              repeat_interval: 4h
+              receiver: email
+              routes:
+                # Watchdog always fires by design (dead-man's switch); don't
+                # email about it. Point an external uptime check at it instead.
+                - matchers:
+                    - alertname = "Watchdog"
+                  receiver: "null"
+            receivers:
+              - name: "null"
+              - name: email
+                email_configs:
+                  - to: "{{ alertmanager_email_to | default('holden@pigscanfly.ca') }}"
+                    send_resolved: true
+        grafana:
+          adminPassword: "{{ grafana_admin_password | default('changeme-grafana') }}"
+          persistence:
+            enabled: true
+            storageClassName: longhorn
+            size: 5Gi
+          ingress:
+            enabled: true
+            ingressClassName: nginx
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt
+            hosts:
+              - "{{ grafana_host }}"
+            tls:
+              - secretName: grafana-tls
+                hosts:
+                  - "{{ grafana_host }}"
+  # A small, human-readable set of extra alerts on top of the stack defaults.
+  # These are the failures you actually want to hear about on a homelab.
+  - name: Apply minimal homelab alert rules
+    kubernetes.core.k8s:
+      state: present
+      definition:
+        apiVersion: monitoring.coreos.com/v1
+        kind: PrometheusRule
+        metadata:
+          name: minimal-homelab-alerts
+          namespace: "{{ monitoring_namespace }}"
+          labels:
+            # Matches the stack's default rule selector as well as our
+            # NilUsesHelmValues override, so it is always picked up.
+            release: kube-prometheus-stack
+        spec:
+          groups:
+            - name: minimal-homelab.rules
+              rules:
+                - alert: InstanceDown
+                  expr: up == 0
+                  for: 5m
+                  labels:
+                    severity: critical
+                  annotations:
+                    summary: "{% raw %}Target {{ $labels.job }} is down{% endraw %}"
+                    description: "{% raw %}{{ $labels.instance }} of job {{ $labels.job }} has been unreachable for more than 5 minutes.{% endraw %}"
+                - alert: NodeMemoryHigh
+                  expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.9
+                  for: 10m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "{% raw %}High memory usage on {{ $labels.instance }}{% endraw %}"
+                    description: "{% raw %}Node {{ $labels.instance }} has used more than 90% of its memory for over 10 minutes.{% endraw %}"
+                - alert: NodeDiskSpaceLow
+                  expr: (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay|squashfs|ramfs"} / node_filesystem_size_bytes) < 0.1
+                  for: 15m
+                  labels:
+                    severity: warning
+                  annotations:
+                    summary: "{% raw %}Low disk space on {{ $labels.instance }}{% endraw %}"
+                    description: "{% raw %}Filesystem {{ $labels.mountpoint }} on {{ $labels.instance }} has less than 10% space free.{% endraw %}"
