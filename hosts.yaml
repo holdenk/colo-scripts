@@ -44,4 +44,11 @@ all:
                   hosts:
                 x86:
                   hosts:
+    fax:
+      # Host with the physical fax modem attached, running HylaFAX. Currently
+      # turo (also the kube-leader), provisioned by playbooks/fax-setup.yaml.
+      # Kept as its own group so the fax modem can move to another host without
+      # being tied to whichever node happens to be the k8s leader.
+      hosts:
+        turo.local.pigscanfly.ca:
 localhost:

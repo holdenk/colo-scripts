@@ -48,6 +48,7 @@ jobs:
             playbooks/ecrypt-ensure.yaml \
             playbooks/ecrypt-cron.yaml \
             playbooks/monitoring.yaml \
+            playbooks/fax-setup.yaml \
             cleanupbooks/k3sremove.yaml \
             cleanupbooks/rookcleanup.yaml; do
             echo "Checking $playbook..."

@@ -54,13 +54,22 @@
         group: root
         mode: "0700"
 
+    - name: Ensure the fax traversal group exists (fax host only)
+      ansible.builtin.group:
+        name: "{{ ecryptfs_fax_group }}"
+        state: present
+      when: "'fax' in group_names"
+
     - name: Ensure mount directory exists
       ansible.builtin.file:
         path: "{{ ecryptfs_mount_dir }}"
         state: directory
         owner: root
-        group: root
-        mode: "0700"
+        # On the fax host let the fax group traverse (x, never list) the mount
+        # root so the fax service user can reach {{ ecryptfs_mount_dir }}/fax.
+        # Every other host keeps the default root:root 0700.
+        group: "{{ ecryptfs_fax_group if 'fax' in group_names else 'root' }}"
+        mode: "{{ '0710' if 'fax' in group_names else '0700' }}"
 
     # ------------------------------------------------------------------
     # Detect if it's already mounted; if it is, we don't touch keys/mount

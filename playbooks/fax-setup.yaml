@@ -1,0 +1,110 @@
+---
+# Provision the HylaFAX fax host (the "fax" inventory group -> turo).
+#
+# Sets up the three things the Fight Health Insurance app needs to send faxes
+# over SSH (see fax_utils.py / setup_faxy_ssh.sh in that repo):
+#   1. the fax service user (fax_user, default "ray")
+#   2. HylaFAX (server + client + PDF tooling)
+#   3. the encrypted scratch directory (fax_scratch_dir, /db/encrypted/fax)
+#
+# The app opens an SSH connection to this host, SFTPs the rendered PDF into
+# <fax_scratch_dir>/<user>/... and runs sendfax. Both the Temporal worker (as
+# root) and the Ray fax actor (as fax_user) connect, so the scratch dir is
+# group-writable by fax_group and the encrypted mount root is made
+# group-traversable on the fax host (see ecrypt.yaml / ecrypt-ensure.yaml).
+#
+# Run with:
+#   ansible-playbook -i hosts.yaml --vault-id dev@secret \
+#     --extra-vars @passwd.yml playbooks/fax-setup.yaml
+#
+# NOTE: binding the physical modem is interactive and needs the modem present,
+# so it is deliberately NOT automated here. After this playbook, run once on
+# the fax host:
+#   sudo faxsetup -nointeractive        # initialise the HylaFAX spool
+#   sudo faxaddmodem ttyACM0            # configure the USB modem
+# then start faxgetty for the modem (e.g. systemctl start faxgetty@ttyACM0).
+- name: Provision the HylaFAX fax host
+  hosts: fax
+  become: true
+  gather_facts: true
+
+  vars_files:
+    - ecrypt-vars.yaml
+    - fax-vars.yaml
+
+  tasks:
+    - name: Install HylaFAX server, client and PDF tooling
+      ansible.builtin.apt:
+        pkg: "{{ fax_packages }}"
+        state: present
+        update_cache: true
+
+    - name: Ensure the fax traversal group exists
+      ansible.builtin.group:
+        name: "{{ fax_group }}"
+        state: present
+
+    - name: Ensure the fax service user exists
+      # dialout gives access to the USB modem device, uucp to the HylaFAX
+      # spool, and fax_group lets it traverse the encrypted mount root.
+      ansible.builtin.user:
+        name: "{{ fax_user }}"
+        shell: /bin/bash
+        groups: "{{ fax_group }},dialout,uucp"
+        append: true
+        create_home: true
+
+    - name: Ensure the fax user's ~/.ssh directory exists
+      # The public key itself is installed out of band by setup_faxy_ssh.sh (it
+      # lives in a k8s secret this playbook has no access to); here we only make
+      # sure the directory is present with the right ownership/permissions.
+      ansible.builtin.file:
+        path: "/home/{{ fax_user }}/.ssh"
+        state: directory
+        owner: "{{ fax_user }}"
+        group: "{{ fax_user }}"
+        mode: "0700"
+
+    - name: Enable the HylaFAX service
+      ansible.builtin.service:
+        name: hylafax
+        enabled: true
+
+    # ------------------------------------------------------------------
+    # Encrypted scratch directory. Only create it while /db/encrypted is
+    # actually mounted (canary present) so we never populate the bare mount
+    # point with a directory the real mount would then shadow.
+    # ------------------------------------------------------------------
+    - name: Check for the /db/encrypted canary file
+      ansible.builtin.stat:
+        path: "{{ ecryptfs_canary_file }}"
+      register: fax_ecryptfs_canary
+
+    - name: Fail if the encrypted mount is not present
+      ansible.builtin.fail:
+        msg: >-
+          {{ ecryptfs_mount_dir }} does not look mounted (canary
+          {{ ecryptfs_canary_file }} is missing); run playbooks/ecrypt-ensure.yaml
+          first so {{ fax_scratch_dir }} is created on the encrypted volume and
+          not on the bare mount point.
+      when: not fax_ecryptfs_canary.stat.exists
+
+    - name: Ensure the encrypted fax scratch directory exists
+      # 2770 root:fax -- setgid so the per-user subdirs the app creates
+      # (mkdir -p <fax_scratch_dir>/<user>) inherit the fax group and stay
+      # writable by both the root worker and the fax_user actor, while the mode
+      # keeps PII unreadable to anyone outside the group.
+      ansible.builtin.file:
+        path: "{{ fax_scratch_dir }}"
+        state: directory
+        owner: root
+        group: "{{ fax_group }}"
+        mode: "2770"
+
+    - name: Remind about the manual modem setup steps
+      ansible.builtin.debug:
+        msg: >-
+          HylaFAX is installed and {{ fax_scratch_dir }} is ready. Binding the
+          physical modem is interactive: run 'sudo faxsetup -nointeractive' then
+          'sudo faxaddmodem {{ fax_modem_device }}' on {{ inventory_hostname }},
+          then start faxgetty for {{ fax_modem_device }}.

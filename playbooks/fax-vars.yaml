@@ -1,0 +1,36 @@
+---
+# Variables for playbooks/fax-setup.yaml -- provisioning the HylaFAX fax host
+# (the "fax" inventory group, currently turo).
+#
+# These are kept in sync with the Fight Health Insurance app, which SSHes into
+# this host to submit faxes:
+#   * fax_user         -> setup_faxy_ssh.sh FAXY_USER and the Ray fax actor,
+#                         whose key k8s/ray/cluster.yaml mounts at ~ray/.ssh
+#   * fax_scratch_dir  -> SshHylaFaxClient.remote_scratch_dir in fax_utils.py
+#   * fax_modem_device -> FaxyMcFaxFace.default_modem in fax_utils.py
+#   * fax_service_port -> HylaFAX hfaxd port (ip_conntrack_ftp set in k3s.yaml)
+
+# The non-root service user the app connects as to run sendfax. Added to the
+# fax group (encrypted-mount traversal) plus dialout/uucp for modem + spool.
+fax_user: ray
+
+# Reuse the encrypted-mount traversal group from ecrypt-vars.yaml so the user,
+# the mount-root perms and the scratch dir all agree on one group name.
+fax_group: "{{ ecryptfs_fax_group }}"
+
+# PII fax payloads are staged here, on the encrypted mount. Must match
+# SshHylaFaxClient.remote_scratch_dir ("/db/encrypted/fax") in the app.
+fax_scratch_dir: "{{ ecryptfs_mount_dir }}/fax"
+
+# USB fax modem device (matches FaxyMcFaxFace.default_modem).
+fax_modem_device: ttyACM0
+
+# HylaFAX client/daemon port (hfaxd). ip_conntrack_ftp for this port is already
+# configured on kubernetes hosts in k3s.yaml.
+fax_service_port: 4559
+
+# HylaFAX packages (Debian/Ubuntu) plus the PDF tooling used for conversion.
+fax_packages:
+  - hylafax-server
+  - hylafax-client
+  - ghostscript
