@@ -114,6 +114,96 @@ defaults {
   - name: Restart multipath
     ansible.builtin.shell: "systemctl restart multipathd.service || echo \"no multipath yay\""
     become: true
+  # --- Hold k3s launchers until the encrypted /db/encrypted volume is unlocked ---
+  # The k3s data and local-storage live on the ecryptfs mount at /db/encrypted
+  # (see ecrypt.yaml). Starting k3s before that volume is unlocked would let it
+  # come up on top of the empty/locked mountpoint. We gate the launchers on the
+  # sentinel file /db/encrypted/safe, which is only visible once the encrypted
+  # volume is decrypted and mounted. This is wired in ONLY via ExecStartPre on
+  # the k3s units, so it never delays sshd or the rest of the boot -- an operator
+  # can still SSH in to unlock /db/encrypted while k3s waits.
+  - name: Install k3s encrypted-volume startup guard script
+    ansible.builtin.copy:
+      dest: /usr/local/bin/k3s-wait-for-encrypted-safe.sh
+      mode: "0755"
+      owner: root
+      group: root
+      content: |
+        #!/bin/sh
+        # Managed by Ansible (playbooks/k3s.yaml): do NOT edit by hand.
+        #
+        # Block the local k3s / k3s-agent launcher from starting until the
+        # encrypted data volume mounted at /db/encrypted has been unlocked. We
+        # detect this via the sentinel file /db/encrypted/safe, which only
+        # becomes visible once the ecryptfs mount is decrypted and mounted
+        # (see playbooks/ecrypt.yaml).
+        #
+        # This runs ONLY as an ExecStartPre for the k3s units, so it can never
+        # delay sshd or anything else the box needs to come up.
+        set -u
+
+        SENTINEL="/db/encrypted/safe"
+        POLL_INTERVAL=5   # seconds between checks
+        LOG_EVERY=12      # remind roughly every POLL_INTERVAL*LOG_EVERY seconds
+
+        log() {
+            # journald captures our stderr under the k3s unit; also try syslog.
+            echo "k3s-encrypted-guard: $1" 1>&2
+            command -v logger >/dev/null 2>&1 && logger -t k3s-encrypted-guard "$1" || true
+        }
+
+        if [ -e "$SENTINEL" ]; then
+            exit 0
+        fi
+
+        log "Not starting k3s: encrypted volume sentinel $SENTINEL is missing (is /db/encrypted unlocked?). Waiting..."
+
+        i=0
+        while [ ! -e "$SENTINEL" ]; do
+            sleep "$POLL_INTERVAL"
+            i=$((i + 1))
+            if [ "$((i % LOG_EVERY))" -eq 0 ]; then
+                log "Still waiting for $SENTINEL before starting k3s (encrypted /db/encrypted not yet unlocked)."
+            fi
+        done
+
+        log "Sentinel $SENTINEL present; allowing k3s to start."
+        exit 0
+    become: true
+  - name: Ensure systemd drop-in dirs exist for the k3s launchers
+    ansible.builtin.file:
+      path: "/etc/systemd/system/{{ item }}.d"
+      state: directory
+      mode: "0755"
+    loop:
+      - k3s.service
+      - k3s-agent.service
+    become: true
+  - name: Gate k3s launchers on the encrypted-volume sentinel
+    ansible.builtin.copy:
+      dest: "/etc/systemd/system/{{ item }}.d/10-wait-for-encrypted.conf"
+      mode: "0644"
+      content: |
+        [Unit]
+        # If this unit sits in "activating (start-pre)", it is waiting for the
+        # encrypted /db/encrypted volume to be unlocked. See
+        # /usr/local/bin/k3s-wait-for-encrypted-safe.sh (managed by k3s.yaml).
+
+        [Service]
+        # Wait as long as needed for the encrypted volume; matches k3s' own
+        # TimeoutStartSec=0 default so the guard below is never killed.
+        TimeoutStartSec=infinity
+        ExecStartPre=/usr/local/bin/k3s-wait-for-encrypted-safe.sh
+    loop:
+      - k3s.service
+      - k3s-agent.service
+    notify: Reload systemd for k3s encrypted-volume guard
+    become: true
+  handlers:
+  - name: Reload systemd for k3s encrypted-volume guard
+    ansible.builtin.systemd:
+      daemon_reload: true
+    become: true
 - hosts: kube-leader
   vars_files:
     - k3s-vars.yaml
