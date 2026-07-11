@@ -1,0 +1,88 @@
+---
+# Idempotently ensure /db/encrypted is mounted on every kubernetes node.
+#
+# Unlike ecrypt.yaml (first-time setup: packages, module config, fstab) this
+# playbook is deliberately lightweight so it is cheap to run on a schedule.
+# It only (re)mounts /db/encrypted where it is not already mounted -- e.g.
+# after a node reboots, since the fstab entry is "noauto" and never mounts the
+# encrypted volume at boot without the passphrase.
+#
+# Requires ecrypt_pw (from passwd.yml vault). Typically invoked via the
+# ensure-encrypted-mounts.sh cron wrapper:
+#   ansible-playbook -i hosts.yaml --vault-id dev@secret \
+#     --extra-vars @passwd.yml playbooks/ecrypt-ensure.yaml
+- name: Ensure /db/encrypted ecryptfs is mounted on k8s nodes
+  hosts: kubernetes
+  become: true
+  gather_facts: false
+
+  vars_files:
+    - ecrypt-vars.yaml
+
+  tasks:
+    - name: Ensure ecryptfs kernel modules are loaded
+      ansible.builtin.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop: "{{ ecryptfs_modules }}"
+      ignore_errors: true  # fine if built-in or differently named
+
+    - name: Ensure backing directory exists
+      ansible.builtin.file:
+        path: "{{ ecryptfs_backing_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    - name: Ensure mount directory exists
+      ansible.builtin.file:
+        path: "{{ ecryptfs_mount_dir }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0700"
+
+    # Presence of the canary means /db/encrypted is mounted. After a reboot the
+    # (noauto) volume is not mounted, so the canary is gone -> we mount it.
+    - name: Check for the /db/encrypted canary file
+      ansible.builtin.stat:
+        path: "{{ ecryptfs_canary_file }}"
+      register: ecryptfs_canary
+
+    - name: Check if /db/encrypted is already a mountpoint
+      ansible.builtin.command: mountpoint -q "{{ ecryptfs_mount_dir }}"
+      register: ecryptfs_mountpoint_check
+      failed_when: false
+      changed_when: false
+      when: not ecryptfs_canary.stat.exists
+
+    - name: Mount /db/encrypted ecryptfs filesystem (explicit, using passphrase)
+      ansible.builtin.command: >
+        mount -t ecryptfs {{ ecryptfs_backing_dir }} {{ ecryptfs_mount_dir }}
+        -o {{ ecryptfs_mount_opts }}
+      when:
+        - not ecryptfs_canary.stat.exists
+        - ecryptfs_mountpoint_check.rc | default(1) != 0
+      register: ecryptfs_mount_result
+      changed_when: ecryptfs_mount_result.rc == 0
+
+    - name: Re-check the canary after mounting
+      ansible.builtin.stat:
+        path: "{{ ecryptfs_canary_file }}"
+      register: ecryptfs_canary_post
+      when: not ecryptfs_canary.stat.exists
+
+    # Fail loudly rather than leave /db/encrypted unmounted: Longhorn's data
+    # path lives under here, and we must never let it write to the bare dir.
+    - name: Fail if /db/encrypted is still not correctly mounted
+      ansible.builtin.fail:
+        msg: >-
+          {{ ecryptfs_mount_dir }} is NOT correctly mounted: canary file
+          {{ ecryptfs_canary_file }} is absent after the mount attempt.
+          If it is already a mountpoint it may be mounted with the wrong key
+          (refusing to stack another mount). Check ecrypt_pw and the backing
+          store {{ ecryptfs_backing_dir }} on this host.
+      when:
+        - not ecryptfs_canary.stat.exists
+        - not (ecryptfs_canary_post.stat.exists | default(false))

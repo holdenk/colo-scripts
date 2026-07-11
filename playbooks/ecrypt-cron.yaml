@@ -1,0 +1,37 @@
+---
+# Install a cron job on the control host that periodically ensures
+# /db/encrypted is mounted on all kubernetes nodes (via ensure-encrypted-mounts.sh).
+#
+# Run once from a checkout on the host that should own the cron job:
+#   ansible-playbook -i hosts.yaml playbooks/ecrypt-cron.yaml
+#
+# Useful overrides (-e):
+#   ecrypt_cron_host    where to install the cron entry (default: localhost)
+#   ecrypt_repo_dir     path to this repo on that host (default: this checkout)
+#   ecrypt_cron_minute  cron schedule minute field (default: every 5 minutes)
+#   ecrypt_cron_user    user that owns the cron entry (default: $USER)
+- name: Install /db/encrypted mount-check cron job
+  hosts: "{{ ecrypt_cron_host | default('localhost') }}"
+  gather_facts: false
+
+  vars:
+    ecrypt_repo_dir: "{{ playbook_dir | dirname }}"
+    ecrypt_cron_minute: "*/5"
+    ecrypt_cron_user: "{{ lookup('env', 'USER') | default('root', true) }}"
+    ecrypt_cron_log: "{{ ecrypt_repo_dir }}/ensure-encrypted-mounts.log"
+
+  tasks:
+    - name: Ensure ensure-encrypted-mounts.sh is executable
+      ansible.builtin.file:
+        path: "{{ ecrypt_repo_dir }}/ensure-encrypted-mounts.sh"
+        mode: "0755"
+
+    - name: Ensure /db/encrypted mount-check runs from cron
+      ansible.builtin.cron:
+        name: ensure /db/encrypted mounted on k8s nodes
+        user: "{{ ecrypt_cron_user }}"
+        minute: "{{ ecrypt_cron_minute }}"
+        # login shell so pip-installed ansible ends up on PATH under cron
+        job: >-
+          bash -lc 'cd {{ ecrypt_repo_dir }} &&
+          ./ensure-encrypted-mounts.sh >> {{ ecrypt_cron_log }} 2>&1'
