@@ -137,3 +137,13 @@ playbooks/buffer
 # ignore auth stuff
 auth
 playbooks/auth
+
+# onboarding image build cache and generated images
+onboarding/.cache/
+onboarding/*.img
+pi-*.img
+jetson-*.img
+
+# ...but the onboarding shared shell lib is source, not a python build dir
+!onboarding/lib/
+!onboarding/lib/*.sh
