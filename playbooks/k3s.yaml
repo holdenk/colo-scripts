@@ -222,12 +222,36 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 '
       dest: /etc/systemd/system/k3s.service.env
     become: true
-  - name: Patch K3s local-storage manifest to include encrypted path
-    ansible.builtin.replace:
-      path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
-      regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
-      replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
-      backup: yes
+  # --- Make the encrypted-local-path StorageClass permanently available ---
+  # We used to patch k3s' bundled /var/lib/rancher/k3s/server/manifests/
+  # local-storage.yaml to add /db/encrypted, but k3s re-extracts and re-applies
+  # its packaged components on every restart/upgrade, wiping that edit and
+  # resetting local-path-config -- which is why the encrypted path kept
+  # vanishing (https://github.com/k3s-io/k3s/issues/1206). Instead we ship a
+  # dedicated provisioner as our OWN auto-deploy manifest, which k3s applies
+  # once and never overwrites.
+  - name: Remove stale encrypted-local-path StorageClass (wrong provisioner)
+    ansible.builtin.shell: |
+      set -eu
+      export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+      current=$(kubectl get storageclass encrypted-local-path \
+        -o jsonpath='{.provisioner}' 2>/dev/null || true)
+      if [ -n "$current" ] && [ "$current" != "pigscanfly.ca/encrypted-local-path" ]; then
+        kubectl delete storageclass encrypted-local-path
+        echo "deleted-stale-storageclass"
+      fi
+    args:
+      executable: /bin/bash
+    register: encrypted_sc_cleanup
+    changed_when: "'deleted-stale-storageclass' in encrypted_sc_cleanup.stdout"
+    become: true
+  - name: Deploy dedicated encrypted-local-path provisioner (persistent)
+    ansible.builtin.copy:
+      src: encrypted-local-path-provisioner.yaml
+      dest: /var/lib/rancher/k3s/server/manifests/encrypted-local-path-provisioner.yaml
+      owner: root
+      group: root
+      mode: "0644"
     become: true
 - hosts: leader-backup
   vars_files:
@@ -247,12 +271,17 @@ NO_PROXY=127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,23.177.16.0/24
 '
       dest: /etc/systemd/system/k3s.service.env
     become: true
-  - name: Patch K3s local-storage manifest to include encrypted path
-    ansible.builtin.replace:
-      path: /var/lib/rancher/k3s/server/manifests/local-storage.yaml
-      regexp: '"paths":\["/var/lib/rancher/k3s/storage"\]'
-      replace: '"paths":["/var/lib/rancher/k3s/storage", "/db/encrypted"]'
-      backup: yes
+  # Same dedicated encrypted-local-path provisioner as on the primary leader.
+  # k3s auto-deploy manifests are applied cluster-wide; keeping an identical
+  # copy on the backup servers means a leader rebuild does not lose it. The
+  # content is identical so the AddOn simply converges (no flapping).
+  - name: Deploy dedicated encrypted-local-path provisioner (persistent)
+    ansible.builtin.copy:
+      src: encrypted-local-path-provisioner.yaml
+      dest: /var/lib/rancher/k3s/server/manifests/encrypted-local-path-provisioner.yaml
+      owner: root
+      group: root
+      mode: "0644"
     register: k3s_manifest_patch
     become: true
 - hosts: pis

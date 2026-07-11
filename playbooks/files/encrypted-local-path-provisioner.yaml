@@ -1,0 +1,160 @@
+# Managed by Ansible (playbooks/k3s.yaml): do NOT edit on the node by hand.
+#
+# Dedicated local-path-provisioner for the encrypted /db/encrypted volume.
+#
+# Why this exists as its own manifest instead of patching k3s' bundled
+# local-storage.yaml: k3s re-extracts and re-applies its packaged components
+# (coredns, local-storage, traefik, ...) on every restart/upgrade, which wipes
+# any edit to /var/lib/rancher/k3s/server/manifests/local-storage.yaml and
+# resets the local-path-config ConfigMap to its default paths. That is why the
+# encrypted path kept disappearing and had to be re-added by hand
+# (see https://github.com/k3s-io/k3s/issues/1206).
+#
+# k3s only manages files it ships itself, so a user-supplied manifest in the
+# auto-deploy dir is applied once and then left alone -- making the
+# encrypted-local-path StorageClass and its /db/encrypted config permanent.
+#
+# This runs a SECOND, independent provisioner (distinct provisioner name and
+# ConfigMap) so it never fights the built-in rancher.io/local-path provisioner
+# that still serves the default local-path StorageClass out of
+# /var/lib/rancher/k3s/storage.
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: encrypted-local-path-provisioner-service-account
+  namespace: kube-system
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: encrypted-local-path-provisioner-role
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "persistentvolumeclaims", "configmaps", "pods/log"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["endpoints", "persistentvolumes", "pods"]
+    verbs: ["*"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: encrypted-local-path-provisioner-bind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: encrypted-local-path-provisioner-role
+subjects:
+  - kind: ServiceAccount
+    name: encrypted-local-path-provisioner-service-account
+    namespace: kube-system
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: encrypted-local-path-provisioner
+  namespace: kube-system
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: encrypted-local-path-provisioner
+  template:
+    metadata:
+      labels:
+        app: encrypted-local-path-provisioner
+    spec:
+      serviceAccountName: encrypted-local-path-provisioner-service-account
+      priorityClassName: "system-node-critical"
+      nodeSelector:
+        kubernetes.io/os: linux
+      tolerations:
+        - key: "CriticalAddonsOnly"
+          operator: "Exists"
+        - key: "node-role.kubernetes.io/control-plane"
+          operator: "Exists"
+          effect: "NoSchedule"
+      containers:
+        - name: encrypted-local-path-provisioner
+          image: "rancher/local-path-provisioner:v0.0.32"
+          imagePullPolicy: IfNotPresent
+          command:
+            - local-path-provisioner
+            - start
+            # Distinct provisioner name + ConfigMap so we never collide with the
+            # built-in rancher.io/local-path provisioner.
+            - --provisioner-name
+            - pigscanfly.ca/encrypted-local-path
+            - --configmap-name
+            - encrypted-local-path-config
+            - --config
+            - /etc/config/config.json
+          volumeMounts:
+            - name: config-volume
+              mountPath: /etc/config/
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+      volumes:
+        - name: config-volume
+          configMap:
+            name: encrypted-local-path-config
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: encrypted-local-path
+provisioner: pigscanfly.ca/encrypted-local-path
+reclaimPolicy: Delete
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: encrypted-local-path-config
+  namespace: kube-system
+data:
+  # This provisioner only ever hands out paths under the encrypted ecryptfs
+  # mount at /db/encrypted (see playbooks/ecrypt.yaml). It is the single
+  # configured path, so every volume it provisions lands there.
+  config.json: |-
+    {
+      "nodePathMap": [
+        {
+          "node": "DEFAULT_PATH_FOR_NON_LISTED_NODES",
+          "paths": ["/db/encrypted"]
+        }
+      ]
+    }
+  setup: |-
+    #!/bin/sh
+    set -eu
+    mkdir -m 0777 -p "$VOL_DIR"
+  teardown: |-
+    #!/bin/sh
+    set -eu
+    rm -rf "$VOL_DIR"
+  helperPod.yaml: |-
+    apiVersion: v1
+    kind: Pod
+    metadata:
+      name: helper-pod
+    spec:
+      priorityClassName: system-node-critical
+      tolerations:
+        - key: node.kubernetes.io/disk-pressure
+          operator: Exists
+          effect: NoSchedule
+      containers:
+        - name: helper-pod
+          image: rancher/mirrored-library-busybox:1.36.1
+          imagePullPolicy: IfNotPresent
