@@ -11,6 +11,12 @@ ecryptfs_backing_dir: /db/encrypted-backing
 ecryptfs_mount_dir: /db/encrypted
 ecryptfs_fstype: ecryptfs
 
+# Well-known canary file that lives inside the encrypted volume. Its presence
+# is what we use to decide "is /db/encrypted actually mounted?" -- a plain
+# mountpoint test can't tell a good mount from an empty/half-set-up one, and if
+# the volume is not mounted this file is simply not there.
+ecryptfs_canary_file: "{{ ecryptfs_mount_dir }}/safe"
+
 ecryptfs_modules:
   - ecryptfs
 

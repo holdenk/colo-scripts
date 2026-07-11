@@ -92,3 +92,24 @@
       when: ecryptfs_mountpoint_check.rc != 0
       register: ecryptfs_mount_result
       changed_when: ecryptfs_mount_result.rc == 0
+
+    # ------------------------------------------------------------------
+    # Drop the canary that ecrypt-ensure.yaml (cron) looks for. Only write
+    # it while actually mounted, so we never pollute the bare mount dir, and
+    # never overwrite an existing canary (force: false).
+    # ------------------------------------------------------------------
+    - name: Confirm /db/encrypted is mounted before writing the canary
+      ansible.builtin.command: mountpoint -q "{{ ecryptfs_mount_dir }}"
+      register: ecryptfs_mounted_now
+      failed_when: false
+      changed_when: false
+
+    - name: Ensure the /db/encrypted canary file exists
+      ansible.builtin.copy:
+        dest: "{{ ecryptfs_canary_file }}"
+        content: "safe\n"
+        force: false
+        owner: root
+        group: root
+        mode: "0644"
+      when: ecryptfs_mounted_now.rc == 0
