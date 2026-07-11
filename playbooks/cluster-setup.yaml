@@ -252,7 +252,7 @@
           ENVIRONMENT: "Prod"
           DJANGO_SETTINGS_MODULE: "fighthealthinsurance.settings"
           SENTRY_ENDPOINT: "{{SENTRY_ENDPOINT}}"
-          FAXYMCFAXFACE_HOST: "10.69.197.33"
+          FAXYMCFAXFACE_HOST: "turo.local.pigscanfly.ca"
           SSL: "on"
           OPENAI_API_BASE: "https://api.endpoints.anyscale.com/v1"
           OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
