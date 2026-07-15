@@ -101,6 +101,21 @@
         group: "{{ fax_group }}"
         mode: "2770"
 
+    - name: Age out old fax scratch files via systemd-tmpfiles
+      # 'e' cleans the contents of an existing directory by age but never
+      # creates it, so nothing is ever written to the bare mountpoint while
+      # /db/encrypted is unmounted. systemd-tmpfiles-clean.timer runs daily by
+      # default on Debian/Ubuntu.
+      ansible.builtin.copy:
+        dest: /etc/tmpfiles.d/fax-scratch.conf
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          # Staged fax payloads contain PII and the app does not delete them
+          # after sending; age them out (managed by playbooks/fax-setup.yaml).
+          e {{ fax_scratch_dir }} - - - {{ fax_scratch_max_age }}
+
     - name: Remind about the manual modem setup steps
       ansible.builtin.debug:
         msg: >-

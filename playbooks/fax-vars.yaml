@@ -29,6 +29,12 @@ fax_modem_device: ttyACM0
 # configured on kubernetes hosts in k3s.yaml.
 fax_service_port: 4559
 
+# The app never deletes staged payloads after sending (see
+# SshHylaFaxClient._upload_file / _send_fax), so systemd-tmpfiles ages them
+# out; under /tmp they were reaped by the OS, on the encrypted mount nothing
+# else would. PII retention window -- shorten/lengthen as policy requires.
+fax_scratch_max_age: 30d
+
 # HylaFAX packages (Debian/Ubuntu) plus the PDF tooling used for conversion.
 fax_packages:
   - hylafax-server
