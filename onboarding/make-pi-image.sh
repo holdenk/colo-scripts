@@ -38,7 +38,7 @@ base_image=""
 image_url="$DEFAULT_IMAGE_URL"
 static_ip=""
 gateway=""
-nameservers="8.8.8.8,4.4.4.4"
+nameservers="8.8.8.8,8.8.4.4"
 
 usage() {
   cat >&2 <<EOF
@@ -85,7 +85,13 @@ fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-pi-${short}.img}"
 
-# 1. Get and stage a private copy of the base image so the cached download
+# 1. Fetch the admins' keys up front -- a GitHub hiccup should cost seconds,
+#    not a multi-GB image copy. emit_cloud_init_users dies if any admin's
+#    keys can't be fetched.
+info "fetching admin SSH keys"
+users_block="$(emit_cloud_init_users)"
+
+# 2. Get and stage a private copy of the base image so the cached download
 #    stays pristine and re-runnable.
 if [[ -n "$base_image" ]]; then
   [[ -f "$base_image" ]] || die "--image not found: $base_image"
@@ -97,7 +103,7 @@ fi
 info "staging base image -> $output"
 cp --reflink=auto "$src_img" "$output"
 
-# 2. Mount the boot (vfat) partition where cloud-init reads its seed files.
+# 3. Mount the boot (vfat) partition where cloud-init reads its seed files.
 loopdev=""
 mnt=""
 cleanup() {
@@ -116,27 +122,26 @@ log "boot partition: $boot_part"
 mnt="$(mktemp -d)"
 as_root mount "$boot_part" "$mnt"
 
-# 3. Write the cloud-init seed (user-data / meta-data / network-config).
+# 4. Write the cloud-init seed (user-data / meta-data / network-config).
 info "writing cloud-init config for $fqdn"
 
-tmp_ud="$(mktemp)"
+# Note: no ssh_pwauth here. Setting it false makes cloud-init write a
+# sshd_config.d drop-in that playbooks/ssh.yaml can't undo (it deliberately
+# re-enables password auth as a break-glass path on every node).
 {
   echo "#cloud-config"
   echo "hostname: $short"
   echo "fqdn: $fqdn"
   echo "prefer_fqdn_over_hostname: true"
   echo "manage_etc_hosts: true"
-  echo "ssh_pwauth: false"
   echo "package_update: true"
   echo "packages:"
   echo "  - python3"          # so Ansible can run without a bootstrap step
-  emit_cloud_init_users
+  printf '%s\n' "$users_block"
   echo "runcmd:"
   echo "  - [ systemctl, enable, --now, ssh ]"
   echo "  - [ touch, /etc/colo-onboarded ]"
-} >"$tmp_ud"
-as_root cp "$tmp_ud" "$mnt/user-data"
-rm -f "$tmp_ud"
+} | as_root tee "$mnt/user-data" >/dev/null
 
 as_root tee "$mnt/meta-data" >/dev/null <<EOF
 instance-id: $short
@@ -174,7 +179,7 @@ fi
 as_root sync
 info "image ready: $output"
 
-# 4. Optionally flash it straight onto an SD card / USB device.
+# 5. Optionally flash it straight onto an SD card / USB device.
 if [[ -n "$device" ]]; then
   [[ -b "$device" ]] || die "--device is not a block device: $device"
   # Release the loop mount before writing so nothing is holding the image.

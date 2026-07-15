@@ -90,9 +90,16 @@ fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-jetson-${short}.img}"
 
-# 1. Bake the admins' keys in now so the node needs no internet just to log in.
+# 1. Bake the admins' keys in now so the node needs no internet just to log
+#    in. Each admin gets only their own keys, and every admin must resolve --
+#    a partial set would bake an image some admins can't reach.
 info "fetching admin SSH keys"
-keys_blob="$(authorized_keys_blob)" || die "could not fetch any admin SSH keys"
+declare -A admin_keys=()
+for entry in "${COLO_ADMINS[@]}"; do
+  user="${entry%%:*}"; gh="${entry##*:}"
+  admin_keys[$user]="$(github_keys "$gh")" \
+    || die "could not fetch SSH keys for github user '$gh' (needed for '$user')"
+done
 
 # 2. Stage a private, re-runnable copy of the base image.
 if [[ -n "$base_image" ]]; then
@@ -125,58 +132,65 @@ log "rootfs partition: $root_part ($fstype)"
 mnt="$(mktemp -d)"
 as_root mount "$root_part" "$mnt"
 
-# 3a. First-boot script (runs natively on the Nano; keys are embedded).
+# 3a. Seed data (hostname, admin list, per-admin keys) consumed by the
+#     first-boot script. Keeping the data out of the script means the script
+#     below is completely static -- no build-time expansion to get wrong, and
+#     each admin's authorized_keys holds only that admin's keys.
 info "installing first-boot onboarding service for $fqdn"
-as_root install -d -m 0755 "$mnt/usr/local/sbin"
-tmp_fb="$(mktemp)"
-{
-  cat <<EOF
-#!/bin/bash
-# Managed by onboarding/make-jetson-image.sh -- runs once at first boot to make
-# this Jetson reachable for Ansible, then disables itself.
-set -eu
-
+seed_dir="$mnt/usr/local/share/colo-onboard"
+as_root install -d -m 0755 "$seed_dir" "$seed_dir/keys"
+as_root tee "$seed_dir/config" >/dev/null <<EOF
 HOSTNAME_FQDN="$fqdn"
 HOSTNAME_SHORT="$short"
-ADMINS=(${COLO_ADMINS[*]})
-
-AUTHZ_KEYS=\$(cat <<'KEYS_EOF'
-$keys_blob
-KEYS_EOF
-)
 EOF
-  cat <<'FIRSTBOOT'
+{
+  for entry in "${COLO_ADMINS[@]}"; do printf '%s\n' "${entry%%:*}"; done
+} | as_root tee "$seed_dir/admins" >/dev/null
+for entry in "${COLO_ADMINS[@]}"; do
+  user="${entry%%:*}"
+  printf '%s\n' "${admin_keys[$user]}" \
+    | as_root tee "$seed_dir/keys/$user.authorized_keys" >/dev/null
+done
+
+# 3b. First-boot script (static; runs natively on the Nano).
+as_root install -d -m 0755 "$mnt/usr/local/sbin"
+as_root tee "$mnt/usr/local/sbin/colo-firstboot.sh" >/dev/null <<'FIRSTBOOT'
+#!/bin/bash
+# Managed by onboarding/make-jetson-image.sh -- runs once at first boot to make
+# this Jetson reachable for Ansible, then disables itself. All inputs come
+# from /usr/local/share/colo-onboard (written at image build time).
+set -eu
+
+CONF_DIR=/usr/local/share/colo-onboard
+# shellcheck source=/dev/null
+. "$CONF_DIR/config"
 
 hostnamectl set-hostname "$HOSTNAME_SHORT" || echo "$HOSTNAME_SHORT" >/etc/hostname
 if ! grep -q "$HOSTNAME_FQDN" /etc/hosts 2>/dev/null; then
   printf '127.0.1.1\t%s %s\n' "$HOSTNAME_FQDN" "$HOSTNAME_SHORT" >>/etc/hosts
 fi
 
-for entry in "${ADMINS[@]}"; do
-  user="${entry%%:*}"
+while IFS= read -r user; do
+  [ -n "$user" ] || continue
   id -u "$user" >/dev/null 2>&1 || useradd -m -s /bin/bash "$user"
   usermod -aG sudo "$user" || true
-  install -d -m 0700 -o "$user" -g "$user" "/home/$user/.ssh"
-  printf '%s\n' "$AUTHZ_KEYS" >"/home/$user/.ssh/authorized_keys"
-  chown "$user:$user" "/home/$user/.ssh/authorized_keys"
-  chmod 0600 "/home/$user/.ssh/authorized_keys"
+  group="$(id -gn "$user")"
+  install -d -m 0700 -o "$user" -g "$group" "/home/$user/.ssh"
+  install -m 0600 -o "$user" -g "$group" \
+    "$CONF_DIR/keys/$user.authorized_keys" "/home/$user/.ssh/authorized_keys"
   printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$user" >"/etc/sudoers.d/90-colo-$user"
   chmod 0440 "/etc/sudoers.d/90-colo-$user"
-done
+done <"$CONF_DIR/admins"
 
-systemctl enable --now ssh 2>/dev/null || systemctl enable --now ssh.service 2>/dev/null || true
+systemctl enable --now ssh 2>/dev/null || true
 
 touch /etc/colo-onboarded
 systemctl disable colo-onboard.service 2>/dev/null || true
-rm -f /etc/systemd/system/multi-user.target.wants/colo-onboard.service
 exit 0
 FIRSTBOOT
-} >"$tmp_fb"
-as_root cp "$tmp_fb" "$mnt/usr/local/sbin/colo-firstboot.sh"
 as_root chmod 0755 "$mnt/usr/local/sbin/colo-firstboot.sh"
-rm -f "$tmp_fb"
 
-# 3b. systemd unit + enable symlink (so we don't need systemctl on the host).
+# 3c. systemd unit + enable symlink (so we don't need systemctl on the host).
 as_root tee "$mnt/etc/systemd/system/colo-onboard.service" >/dev/null <<'EOF'
 [Unit]
 Description=Colo first-boot onboarding (users, keys, hostname, ssh)
@@ -196,10 +210,34 @@ as_root install -d -m 0755 "$mnt/etc/systemd/system/multi-user.target.wants"
 as_root ln -sf /etc/systemd/system/colo-onboard.service \
   "$mnt/etc/systemd/system/multi-user.target.wants/colo-onboard.service"
 
-# 3c. Mask the interactive oem-config wizard so it never blocks the console.
+# 3d. Mask the interactive oem-config wizard so it never blocks the console.
+# Unit names drift between JetPack releases, so mask what actually exists in
+# the image (masking a nonexistent unit is a silent no-op) plus any
+# nv-oem-config* frontends found by glob, and say what happened either way.
+masked=()
 for unit in $oem_services; do
-  as_root ln -sf /dev/null "$mnt/etc/systemd/system/$unit"
+  for dir in lib/systemd/system usr/lib/systemd/system etc/systemd/system; do
+    if [[ -e "$mnt/$dir/$unit" ]]; then
+      as_root ln -sf /dev/null "$mnt/etc/systemd/system/$unit"
+      masked+=("$unit")
+      break
+    fi
+  done
 done
+for f in "$mnt"/lib/systemd/system/nv-oem-config*.service \
+         "$mnt"/usr/lib/systemd/system/nv-oem-config*.service; do
+  [[ -e "$f" ]] || continue
+  unit="$(basename "$f")"
+  [[ " ${masked[*]} " == *" $unit "* ]] && continue
+  as_root ln -sf /dev/null "$mnt/etc/systemd/system/$unit"
+  masked+=("$unit")
+done
+if [[ ${#masked[@]} -gt 0 ]]; then
+  log "masked first-boot wizard units: ${masked[*]}"
+else
+  warn "no oem-config/nvfb units found in this image -- relying only on the"
+  warn "default.target override to skip the wizard (see --oem-config-service)"
+fi
 # Boot straight to multi-user rather than the oem-config target.
 as_root ln -sf /lib/systemd/system/multi-user.target "$mnt/etc/systemd/system/default.target"
 

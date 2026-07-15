@@ -8,7 +8,14 @@
 
 # --- shared defaults --------------------------------------------------------
 
-# DNS domain new nodes live under (matches playbooks/k3s-vars.yaml).
+# DNS domain new nodes live under. Read from playbooks/k3s-vars.yaml (the
+# single source of truth the k3sup joins use) so the two can't drift; the
+# literal is only a fallback for running a script copied out of the repo.
+if [[ -z "${COLO_DOMAIN:-}" ]]; then
+  COLO_DOMAIN="$(sed -n 's/^domain:[[:space:]]*//p' \
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)/playbooks/k3s-vars.yaml" \
+    2>/dev/null | head -n1)"
+fi
 : "${COLO_DOMAIN:=local.pigscanfly.ca}"
 
 # Admins who should be able to SSH into a freshly-imaged node, mirroring
@@ -70,24 +77,10 @@ fully_qualify() {
 # github_keys <github-user>  -- print that user's public SSH keys, or fail.
 github_keys() {
   local gh="$1" keys
-  keys="$(curl -fsSL "https://github.com/${gh}.keys" 2>/dev/null || true)"
+  keys="$(curl -fsSL --retry 3 --retry-delay 2 \
+    "https://github.com/${gh}.keys" 2>/dev/null || true)"
   [[ -n "$keys" ]] || return 1
   printf '%s\n' "$keys"
-}
-
-# authorized_keys_blob  -- concatenated public keys for every COLO_ADMIN.
-authorized_keys_blob() {
-  local entry gh keys any=0
-  for entry in "${COLO_ADMINS[@]}"; do
-    gh="${entry##*:}"
-    if keys="$(github_keys "$gh")"; then
-      printf '%s\n' "$keys"
-      any=1
-    else
-      warn "no SSH keys found for github user '$gh'"
-    fi
-  done
-  [[ $any -eq 1 ]] || return 1
 }
 
 # emit_cloud_init_users  -- print a cloud-init `users:` block for the admins,
@@ -117,7 +110,7 @@ emit_cloud_init_users() {
 # echoing the path to the ready-to-use .img on stdout.
 resolve_base_image() {
   local url="$1" cache="$2"
-  local fname base img
+  local fname img
   fname="$(basename "$url")"
   mkdir -p "$cache"
 
@@ -133,20 +126,35 @@ resolve_base_image() {
 
   case "$fname" in
     *.img.xz|*.xz)
+      require_cmds xz
       img="$cache/${fname%.xz}"
       if [[ ! -f "$img" ]]; then
         info "decompressing $fname"
-        xz -dkc "$archive" >"$img.part" && mv "$img.part" "$img"
+        if ! xz -dkc "$archive" >"$img.part"; then
+          rm -f "$img.part"
+          die "xz decompression of $fname failed (corrupt download or disk full?)"
+        fi
+        mv "$img.part" "$img"
       fi
       ;;
     *.img.zip|*.zip)
-      base="${fname%.zip}"
-      img="$cache/${base%.img}.img"
+      require_cmds unzip
+      # Ask the zip for its .img member name -- vendor zips (e.g. JetPack's
+      # sd-blob-b01.img) rarely match the archive's own filename, and unzip
+      # restores archived mtimes so no -newer heuristic can find it either.
+      local member
+      member="$(unzip -Z1 "$archive" 2>/dev/null | grep -i '\.img$' | head -n1 || true)"
+      [[ -n "$member" ]] || die "no .img member inside $fname"
+      img="$cache/$(basename "$member")"
       if [[ ! -f "$img" ]]; then
-        info "unzipping $fname"
-        ( cd "$cache" && unzip -o "$fname" >/dev/null )
-        img="$(find "$cache" -maxdepth 1 -name '*.img' -newer "$archive" | head -n1)"
-        [[ -n "$img" ]] || die "no .img found after unzipping $fname"
+        info "unzipping $member from $fname"
+        ( cd "$cache" && unzip -o "$fname" "$member" >/dev/null ) \
+          || die "unzip of $member from $fname failed"
+        # Flatten a path-carrying member down into the cache root.
+        if [[ "$member" != "$(basename "$member")" && -f "$cache/$member" ]]; then
+          mv "$cache/$member" "$img"
+        fi
+        [[ -f "$img" ]] || die "extraction of $member from $fname failed"
       fi
       ;;
     *.img)

@@ -93,6 +93,8 @@ done
 
 [[ -n "$bmc_host" ]] || die "BMC host is required (--host or TPI_HOST)"
 case "$power_action" in on|off|reset|status) ;; *) die "invalid --power: $power_action" ;; esac
+[[ "$power_action" == "status" && ${#flash_map[@]} -gt 0 ]] \
+  && die "--flash conflicts with --power status (status is read-only and would silently skip the flash)"
 
 # Prefer the tpi CLI; fall back to the BMC REST API via curl.
 have_tpi=false
@@ -136,12 +138,14 @@ node_power() {
   esac
 }
 
-# power_status  -- print whatever the board reports for all slots.
+# power_status  -- print whatever the board reports for all slots; fails
+# loudly (callers decide whether that is fatal) instead of masking a 401 or
+# unreachable BMC as an empty-but-successful report.
 power_status() {
   if $have_tpi; then
-    tpi power status || true
+    tpi power status
   else
-    bmc_api "opt=get&type=power" || true
+    bmc_api "opt=get&type=power"
   fi
 }
 
@@ -155,18 +159,33 @@ node_hostname() {
   fi
 }
 
-# wait_for_ssh <host> <timeout>  -- return 0 once TCP/22 opens, else non-zero.
-wait_for_ssh() {
-  local host="$1" timeout="$2" deadline
+# probe_node <host> <timeout>  -- watch for the node to come up; prints one of
+#   auth  ssh key auth as the first admin works (truly ready for Ansible)
+#   tcp   port 22 open but key auth unconfirmed (first-boot onboarding may
+#         still be running, or no matching key is loaded on this workstation)
+#   down  nothing answered before the deadline
+probe_node() {
+  local host="$1" timeout="$2" deadline tcp_up=false
+  local probe_user="${COLO_ADMINS[0]%%:*}"
   deadline=$(( $(date +%s) + timeout ))
   while (( $(date +%s) < deadline )); do
-    if (exec 3<>"/dev/tcp/${host}/22") 2>/dev/null; then
-      exec 3>&- 3<&-
-      return 0
+    if ! $tcp_up; then
+      # timeout(1) bounds the connect: a dropped SYN would otherwise block for
+      # the kernel's full retry cycle (~2 min), blowing well past --timeout.
+      timeout 5 bash -c "exec 3<>/dev/tcp/${host}/22" 2>/dev/null && tcp_up=true
+    fi
+    if $tcp_up; then
+      command -v ssh >/dev/null 2>&1 || { echo tcp; return; }
+      if timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 \
+           -o StrictHostKeyChecking=accept-new \
+           "${probe_user}@${host}" true 2>/dev/null; then
+        echo auth
+        return
+      fi
     fi
     sleep 5
   done
-  return 1
+  if $tcp_up; then echo tcp; else echo down; fi
 }
 
 # --- resolve which slots to act on -----------------------------------------
@@ -186,7 +205,11 @@ done
 
 info "Turing Pi BMC: $bmc_host"
 log "board status before changes:"
-power_status >&2
+if ! power_status >&2; then
+  bmc_err="could not read BMC power status (check --host/--user/--pass; BMC firmware >= 2.0 requires authentication)"
+  [[ "$power_action" == "status" ]] && die "$bmc_err"
+  warn "$bmc_err"
+fi
 
 # --- status-only mode -------------------------------------------------------
 if [[ "$power_action" == "status" ]]; then
@@ -214,8 +237,9 @@ done
 # --- discover which slots actually came up ----------------------------------
 if $do_wait && [[ "$power_action" != "off" ]]; then
   echo >&2
-  info "waiting up to ${wait_timeout}s per slot for nodes to answer on SSH"
-  declare -a ready=() nores=() unknown=()
+  info "waiting up to ${wait_timeout}s (all slots probed in parallel) for nodes to answer on SSH"
+  probe_dir="$(mktemp -d)"
+  declare -a probed=() unknown=()
   for node in "${nodes[@]}"; do
     host="$(node_hostname "$node")"
     if [[ -z "$host" ]]; then
@@ -224,27 +248,41 @@ if $do_wait && [[ "$power_action" != "off" ]]; then
       continue
     fi
     log "node $node: probing $host ..."
-    if wait_for_ssh "$host" "$wait_timeout"; then
-      info "node $node: $host is up (ssh reachable)"
-      ready+=("$node=$host")
-    else
-      warn "node $node: $host did not answer (empty slot, still booting, or wrong hostname)"
-      nores+=("$node=$host")
-    fi
+    probe_node "$host" "$wait_timeout" >"$probe_dir/$node" &
+    probed+=("$node=$host")
   done
+  wait
+
+  declare -a ready=() pending=() nores=()
+  for entry in "${probed[@]}"; do
+    node="${entry%%=*}"; host="${entry#*=}"
+    case "$(cat "$probe_dir/$node" 2>/dev/null)" in
+      auth)
+        info "node $node: $host is up (ssh key auth OK)"
+        ready+=("$node=$host") ;;
+      tcp)
+        warn "node $node: $host has port 22 open but key auth isn't confirmed (first-boot onboarding may still be running, or no matching key is loaded here)"
+        pending+=("$node=$host") ;;
+      *)
+        warn "node $node: $host did not answer (empty slot, still booting, or wrong hostname)"
+        nores+=("$node=$host") ;;
+    esac
+  done
+  rm -rf "$probe_dir"
 
   echo >&2
   info "summary:"
-  printf '  ready:    %s\n' "${ready[*]:-none}" >&2
-  printf '  no reply: %s\n' "${nores[*]:-none}" >&2
-  [[ ${#unknown[@]} -gt 0 ]] && printf '  no host:  %s\n' "${unknown[*]}" >&2
+  printf '  ready:     %s\n' "${ready[*]:-none}" >&2
+  [[ ${#pending[@]} -gt 0 ]] && printf '  port open: %s\n' "${pending[*]}" >&2
+  printf '  no reply:  %s\n' "${nores[*]:-none}" >&2
+  [[ ${#unknown[@]} -gt 0 ]] && printf '  no host:   %s\n' "${unknown[*]}" >&2
 
-  if [[ ${#ready[@]} -gt 0 ]]; then
+  if [[ $(( ${#ready[@]} + ${#pending[@]} )) -gt 0 ]]; then
     limit=""
-    for entry in "${ready[@]}"; do limit+="${limit:+,}${entry#*=}"; done
+    for entry in "${ready[@]}" "${pending[@]}"; do limit+="${limit:+,}${entry#*=}"; done
     cat >&2 <<EOF
 
-Next steps for the nodes that came up:
+Next steps for the nodes that answered:
   1. Add them to the right group in hosts.yaml (pis / arm-gpus).
   2. Onboard with Ansible, e.g.:
        ansible-playbook -i hosts.yaml --vault-id dev@secret \\
@@ -256,4 +294,4 @@ fi
 
 echo >&2
 log "board status after changes:"
-power_status >&2
+power_status >&2 || warn "could not read BMC power status"
