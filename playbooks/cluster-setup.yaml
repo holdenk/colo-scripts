@@ -119,6 +119,24 @@
             }
           }
           } | to_json | b64encode }}"
+  # Consumed (optionally) by the vLLM deployments in
+  # healthinsurance-llm-internal/serve_kube*.yaml as HF_TOKEN, so model pulls
+  # from the HuggingFace Hub are authenticated instead of anonymous —
+  # anonymous pulls get throttled (HTTP 504) once a crash-looping pod has
+  # re-downloaded the model a few dozen times.  A fine-grained read-only
+  # token is enough; add HF_HUB_TOKEN to the vault (passwd.yml) to enable.
+  - name: Create totallylegitco HuggingFace Hub token secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: hf-token
+          namespace: totallylegitco
+        stringData:
+          token: "{{HF_HUB_TOKEN}}"
+      state: present
+    when: HF_HUB_TOKEN is defined
   - name: Create totallylegitco primary secrets
     community.kubernetes.k8s:
       definition:
