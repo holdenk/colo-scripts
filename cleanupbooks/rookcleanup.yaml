@@ -13,6 +13,7 @@
     community.kubernetes.helm_repository:
       name: rook-release
       repo_url: "https://charts.rook.io/release"
+      force_update: true
   - name: Delete rook ceph ns
     community.kubernetes.helm:
       name: rook-ceph

@@ -356,6 +356,7 @@
     kubernetes.core.helm_repository:
       name: "{{ item.name }}"
       repo_url: "{{ item.url }}"
+      force_update: true
     loop:
       - {name: nvidia, url: "https://helm.ngc.nvidia.com/nvidia"}
       - {name: opensearch-operator, url: "https://opensearch-project.github.io/opensearch-k8s-operator/"}
