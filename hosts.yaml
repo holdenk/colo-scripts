@@ -19,23 +19,23 @@ all:
               hosts:
         workers:
           children:
-            pis:
-              hosts:
-                erpi1.local.pigscanfly.ca:
-                erpi2.local.pigscanfly.ca:
-                erpi3.local.pigscanfly.ca:
-                rpi1.local.pigscanfly.ca:
-                rpi2.local.pigscanfly.ca:
+#            pis:
+#              hosts:
+#                erpi1.local.pigscanfly.ca:
+#                erpi2.local.pigscanfly.ca:
+#                erpi3.local.pigscanfly.ca:
+#                rpi1.local.pigscanfly.ca:
+#                rpi2.local.pigscanfly.ca:
             docker-hosts:
               children:
                 gpus:
                   children:
                     arm-gpus:
                       hosts:
-                        nvmini3.local.pigscanfly.ca:
-                        nvmini4.local.pigscanfly.ca:
-                        k8s-worker-nv1.local.pigscanfly.ca:
-                        k8s-worker-nv3.local.pigscanfly.ca:
+#                        nvmini3.local.pigscanfly.ca:
+#                        nvmini4.local.pigscanfly.ca:
+#                        k8s-worker-nv1.local.pigscanfly.ca:
+#                        k8s-worker-nv3.local.pigscanfly.ca:
                     x86-gpus:
                       hosts:
                         plushy.local.pigscanfly.ca:

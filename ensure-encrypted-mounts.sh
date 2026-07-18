@@ -20,6 +20,7 @@
 # Install it with playbooks/ecrypt-cron.yaml, or by hand, e.g.:
 #   */5 * * * * cd /path/to/colo-scripts && ./ensure-encrypted-mounts.sh \
 #     >> ensure-encrypted-mounts.log 2>&1
+source ~/.bashrc
 set -euo pipefail
 
 # Resolve repo root from this script's location so cron can call it by abs path.
