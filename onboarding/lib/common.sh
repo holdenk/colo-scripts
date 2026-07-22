@@ -23,6 +23,18 @@ fi
 # keys are pulled from https://github.com/<github-user>.keys at build time and
 # baked into the image, so a new node is reachable the moment it boots -- no
 # first-boot internet required just to log in.
+#
+# DESIGN DECISION (intended direction -- see mixed-source-of-truth note below):
+# An onboarding image does NOT actually need every admin's keys. It only needs
+# to get *the operator running the setup script* onto the box far enough for
+# Ansible to take over; playbooks/ssh.yaml then creates every admin (holden,
+# warrick, ...) with their GitHub keys. So the target model is to bake only the
+# operator's own public key (their ~/.ssh/*.pub) into a single bootstrap user,
+# and let playbooks/ssh.yaml remain the ONE source of truth for admin access.
+# That removes this list from the image path entirely and kills the drift
+# between COLO_ADMINS here and the admin list in playbooks/ssh.yaml -- the two
+# can never disagree if only one of them owns admin keys. Until that switch is
+# made, COLO_ADMINS is the explicit interim list used for build-time baking.
 COLO_ADMINS=(
   "holden:holdenk"
   "warrick:nyghtowl"

@@ -20,6 +20,12 @@
 # host doing the build stays simple; the account creation itself runs natively
 # on the Nano at first boot.
 #
+# Design note: the image only has to get the operator far enough for Ansible to
+# connect; playbooks/ssh.yaml distributes every admin's keys afterward. The
+# intended direction is therefore to bake only the operator's own key here and
+# let ssh.yaml own admin access as the single source of truth -- see the
+# COLO_ADMINS design-decision note in lib/common.sh.
+#
 # NOTE: this targets the Jetson *Nano Developer Kit* SD-card image. Production
 # modules (eMMC) are flashed with NVIDIA's SDK Manager / flash.sh instead; the
 # oem-config service names can also drift between JetPack releases, so
