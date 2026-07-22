@@ -42,6 +42,7 @@ nodes_arg=""                # e.g. "1 2 4"; empty => all four slots
 node_prefix="${TPI_NODE_PREFIX:-}"
 do_wait=false
 wait_timeout=300
+probe_user=""               # ssh user for --wait key-auth check (default: operator)
 declare -A flash_map=()     # node -> image path
 declare -A host_map=()      # node -> explicit hostname
 
@@ -61,6 +62,8 @@ Usage: $0 [options]
   --node-prefix NAME    derive hostnames NAME1..NAME4 for --wait probing
   --node-host NODE=HOST explicit hostname for a slot (repeatable; overrides
                         --node-prefix for that slot)
+  --probe-user NAME     ssh user for the --wait key-auth check; should match the
+                        image's bootstrap user (default: the operator)
   -h, --help            show this help
 
 Node hostnames (for --wait) are resolved per slot as, in order of precedence:
@@ -80,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --node-prefix) node_prefix="${2:?}"; shift 2 ;;
     --wait)        do_wait=true; shift ;;
     --timeout)     wait_timeout="${2:?}"; shift 2 ;;
+    --probe-user)  probe_user="${2:?}"; shift 2 ;;
     --flash)
       [[ "${2:-}" == *=* ]] || die "--flash expects NODE=IMAGE"
       flash_map["${2%%=*}"]="${2#*=}"; shift 2 ;;
@@ -98,6 +102,9 @@ case "$power_action" in on|off|reset|status) ;; *) die "invalid --power: $power_
 # probe_node bounds each connect with timeout(1); without it a dropped SYN
 # would block for the kernel's full retry cycle (~2 min) instead of --timeout.
 $do_wait && require_cmds timeout
+# Probe as the image's bootstrap user (the operator, unless overridden) -- the
+# only account that can key-auth on a freshly-imaged node before ssh.yaml runs.
+probe_user="${probe_user:-$(operator_user)}"
 
 # Prefer the tpi CLI; fall back to the BMC REST API via curl.
 have_tpi=false
@@ -169,7 +176,6 @@ node_hostname() {
 #   down  nothing answered before the deadline
 probe_node() {
   local host="$1" timeout="$2" deadline tcp_up=false
-  local probe_user="${COLO_ADMINS[0]%%:*}"
   deadline=$(( $(date +%s) + timeout ))
   while (( $(date +%s) < deadline )); do
     if ! $tcp_up; then

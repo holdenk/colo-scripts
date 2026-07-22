@@ -18,27 +18,16 @@ if [[ -z "${COLO_DOMAIN:-}" ]]; then
 fi
 : "${COLO_DOMAIN:=local.pigscanfly.ca}"
 
-# Admins who should be able to SSH into a freshly-imaged node, mirroring
-# playbooks/ssh.yaml. Format: "<unix-user>:<github-user>". Each admin's public
-# keys are pulled from https://github.com/<github-user>.keys at build time and
-# baked into the image, so a new node is reachable the moment it boots -- no
-# first-boot internet required just to log in.
+# DESIGN DECISION: onboarding images carry only the key of the *operator*
+# running the setup script -- NOT the full admin roster.
 #
-# DESIGN DECISION (intended direction -- see mixed-source-of-truth note below):
-# An onboarding image does NOT actually need every admin's keys. It only needs
-# to get *the operator running the setup script* onto the box far enough for
-# Ansible to take over; playbooks/ssh.yaml then creates every admin (holden,
-# warrick, ...) with their GitHub keys. So the target model is to bake only the
-# operator's own public key (their ~/.ssh/*.pub) into a single bootstrap user,
-# and let playbooks/ssh.yaml remain the ONE source of truth for admin access.
-# That removes this list from the image path entirely and kills the drift
-# between COLO_ADMINS here and the admin list in playbooks/ssh.yaml -- the two
-# can never disagree if only one of them owns admin keys. Until that switch is
-# made, COLO_ADMINS is the explicit interim list used for build-time baking.
-COLO_ADMINS=(
-  "holden:holdenk"
-  "warrick:nyghtowl"
-)
+# An image only has to get the operator onto the box far enough for Ansible to
+# connect; playbooks/ssh.yaml then creates every admin (holden, warrick, ...)
+# with their GitHub keys. Keeping admin keys solely in ssh.yaml means there is
+# ONE source of truth for who has access -- there is deliberately no admin list
+# in these scripts to drift out of sync with the playbook. The operator's own
+# public key is a local file they already hold the private half of, so baking
+# it needs no network and no GitHub fetch at build time.
 
 # --- logging ----------------------------------------------------------------
 
@@ -86,35 +75,74 @@ fully_qualify() {
   fi
 }
 
-# github_keys <github-user>  -- print that user's public SSH keys, or fail.
-github_keys() {
-  local gh="$1" keys
-  keys="$(curl -fsSL --retry 3 --retry-delay 2 \
-    "https://github.com/${gh}.keys" 2>/dev/null || true)"
-  [[ -n "$keys" ]] || return 1
-  printf '%s\n' "$keys"
+# operator_user  -- the human running the setup script. Unwraps sudo so that
+# `sudo ./make-pi-image.sh` still resolves to the invoking user, not root.
+operator_user() {
+  printf '%s\n' "${SUDO_USER:-$(id -un)}"
 }
 
-# emit_cloud_init_users  -- print a cloud-init `users:` block for the admins,
-# with their GitHub keys baked in. Used by the (cloud-init based) Pi image.
-emit_cloud_init_users() {
-  local entry user gh keys line
-  printf 'users:\n'
-  for entry in "${COLO_ADMINS[@]}"; do
-    user="${entry%%:*}"; gh="${entry##*:}"
-    keys="$(github_keys "$gh")" \
-      || die "could not fetch SSH keys for github user '$gh' (needed for '$user')"
-    printf '  - name: %s\n' "$user"
-    printf '    groups: [adm, sudo]\n'
-    printf '    shell: /bin/bash\n'
-    printf '    lock_passwd: true\n'
-    printf '    sudo: "ALL=(ALL) NOPASSWD:ALL"\n'
-    printf '    ssh_authorized_keys:\n'
-    while IFS= read -r line; do
-      [[ -n "$line" ]] || continue
-      printf '      - "%s"\n' "$line"
-    done <<<"$keys"
+# operator_home  -- home directory of operator_user (via passwd, $HOME fallback).
+operator_home() {
+  local home
+  home="$(getent passwd "$(operator_user)" 2>/dev/null | cut -d: -f6)"
+  [[ -n "$home" ]] && printf '%s\n' "$home" || printf '%s\n' "$HOME"
+}
+
+# default_pubkey  -- path to the operator's SSH public key, or fail. Honors
+# $SSH_PUBKEY, else prefers a standard key type, else the first ~/.ssh/*.pub.
+default_pubkey() {
+  if [[ -n "${SSH_PUBKEY:-}" ]]; then
+    printf '%s\n' "$SSH_PUBKEY"
+    return 0
+  fi
+  local home k
+  home="$(operator_home)"
+  for k in id_ed25519 id_ecdsa id_rsa; do
+    if [[ -f "$home/.ssh/$k.pub" ]]; then
+      printf '%s\n' "$home/.ssh/$k.pub"
+      return 0
+    fi
   done
+  # Fall back to the first *.pub; if the glob doesn't match it stays literal,
+  # so the -f test below fails and we report "none found".
+  local -a pubs=("$home"/.ssh/*.pub)
+  [[ -f "${pubs[0]}" ]] || return 1
+  printf '%s\n' "${pubs[0]}"
+}
+
+# emit_cloud_init_bootstrap_user <user> <pubkey-file>  -- print a cloud-init
+# `users:` block for a single bootstrap user carrying the operator's key(s).
+emit_cloud_init_bootstrap_user() {
+  local user="$1" keyfile="$2" line
+  printf 'users:\n'
+  printf '  - name: %s\n' "$user"
+  printf '    groups: [adm, sudo]\n'
+  printf '    shell: /bin/bash\n'
+  printf '    lock_passwd: true\n'
+  printf '    sudo: "ALL=(ALL) NOPASSWD:ALL"\n'
+  printf '    ssh_authorized_keys:\n'
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    printf '      - "%s"\n' "$line"
+  done <"$keyfile"
+}
+
+# resolve_bootstrap_key <pubkey-arg>  -- echo a validated pubkey path, dying
+# with actionable advice if none is found. Empty arg => auto-detect.
+resolve_bootstrap_key() {
+  local pubkey="$1"
+  if [[ -z "$pubkey" ]]; then
+    pubkey="$(default_pubkey)" || die \
+      "no SSH public key found for operator '$(operator_user)' in $(operator_home)/.ssh; pass --pubkey FILE or run ssh-keygen"
+  fi
+  [[ -f "$pubkey" ]] || die "--pubkey not found: $pubkey"
+  local first
+  IFS= read -r first <"$pubkey" || true
+  case "$first" in
+    ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*) ;;
+    *) die "--pubkey does not look like an SSH public key: $pubkey" ;;
+  esac
+  printf '%s\n' "$pubkey"
 }
 
 # resolve_base_image <url> <cache_dir>  -- ensure the (possibly .xz/.zip

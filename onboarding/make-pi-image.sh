@@ -4,19 +4,19 @@
 # Takes the stock Ubuntu Server "preinstalled" arm64 image for Raspberry Pi and
 # bakes in a cloud-init config so the Pi comes up on the network with:
 #   * its hostname set (under COLO_DOMAIN, default local.pigscanfly.ca)
-#   * the colo admins (holden, warrick) created with passwordless sudo and their
-#     GitHub SSH keys installed
+#   * a single bootstrap user (the operator running this script, by default)
+#     created with passwordless sudo and the operator's own SSH public key
 #   * ssh enabled
 #
-# That is exactly the state playbooks/ssh.yaml + playbooks/k3s.yaml expect, so
-# once the Pi is up you just add it to hosts.yaml (the "pis" group) and run the
-# usual Ansible flow -- no keyboard/monitor needed.
+# That is exactly the state playbooks/ssh.yaml + playbooks/k3s.yaml need to
+# connect: once the Pi is up you add it to hosts.yaml (the "pis" group) and run
+# the usual Ansible flow -- no keyboard/monitor needed.
 #
-# Design note: the image only has to get the operator far enough for Ansible to
-# connect; playbooks/ssh.yaml distributes every admin's keys afterward. The
-# intended direction is therefore to bake only the operator's own key here and
-# let ssh.yaml own admin access as the single source of truth -- see the
-# COLO_ADMINS design-decision note in lib/common.sh.
+# Design note: the image only carries the operator's key -- just enough to let
+# Ansible in. playbooks/ssh.yaml then distributes every admin's keys, so it
+# stays the single source of truth for admin access and there is no admin list
+# here to drift out of sync (see lib/common.sh). Baking a local pubkey also
+# means no GitHub fetch / network at build time.
 #
 # The result is an .img you can write to an SD card (or feed to
 # setup-turing-pi.sh --flash for a Turing Pi CM4 slot). Optionally write it
@@ -25,7 +25,8 @@
 # Examples:
 #   ./make-pi-image.sh --hostname rpi3
 #   ./make-pi-image.sh --hostname erpi4 --device /dev/sdX
-#   ./make-pi-image.sh --hostname rpi3 --output /tmp/rpi3.img --ip 10.0.0.53/24 --gateway 10.0.0.1
+#   ./make-pi-image.sh --hostname rpi3 --user holden --pubkey ~/.ssh/id_ed25519.pub
+#   ./make-pi-image.sh --hostname rpi3 --ip 10.0.0.53/24 --gateway 10.0.0.1
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -45,6 +46,8 @@ image_url="$DEFAULT_IMAGE_URL"
 static_ip=""
 gateway=""
 nameservers="8.8.8.8,8.8.4.4"
+bootstrap_user=""
+pubkey=""
 
 usage() {
   cat >&2 <<EOF
@@ -58,11 +61,18 @@ Usage: $0 --hostname NAME [options]
                       (DESTRUCTIVE -- prompts first)
   --image FILE        use this already-downloaded/decompressed base .img
   --image-url URL     base image to download (default: Ubuntu 24.04 raspi)
+  --user NAME         bootstrap user to create for Ansible to connect as
+                      (default: the operator running this script)
+  --pubkey FILE       SSH public key to install for that user
+                      (default: the operator's own ~/.ssh key, or \$SSH_PUBKEY)
   --ip CIDR           configure a static address (e.g. 10.0.0.53/24) instead
                       of DHCP; requires --gateway
   --gateway IP        default gateway for --ip
   --nameservers LIST  comma-separated DNS servers for --ip (default: $nameservers)
   -h, --help          show this help
+
+Only the operator's key is baked in -- just enough for Ansible to connect.
+playbooks/ssh.yaml then installs every admin's keys.
 EOF
   exit "${1:-1}"
 }
@@ -74,6 +84,8 @@ while [[ $# -gt 0 ]]; do
     --device)      device="${2:?}"; shift 2 ;;
     --image)       base_image="${2:?}"; shift 2 ;;
     --image-url)   image_url="${2:?}"; shift 2 ;;
+    --user)        bootstrap_user="${2:?}"; shift 2 ;;
+    --pubkey)      pubkey="${2:?}"; shift 2 ;;
     --ip)          static_ip="${2:?}"; shift 2 ;;
     --gateway)     gateway="${2:?}"; shift 2 ;;
     --nameservers) nameservers="${2:?}"; shift 2 ;;
@@ -90,12 +102,12 @@ require_cmds curl xz losetup mount umount blkid
 fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-pi-${short}.img}"
+bootstrap_user="${bootstrap_user:-$(operator_user)}"
 
-# 1. Fetch the admins' keys up front -- a GitHub hiccup should cost seconds,
-#    not a multi-GB image copy. emit_cloud_init_users dies if any admin's
-#    keys can't be fetched.
-info "fetching admin SSH keys"
-users_block="$(emit_cloud_init_users)"
+# 1. Resolve the operator's key up front (fail-fast, before any multi-GB copy).
+pubkey="$(resolve_bootstrap_key "$pubkey")"
+info "bootstrap user '$bootstrap_user' with key $pubkey"
+users_block="$(emit_cloud_init_bootstrap_user "$bootstrap_user" "$pubkey")"
 
 # 2. Get and stage a private copy of the base image so the cached download
 #    stays pristine and re-runnable.
@@ -205,8 +217,9 @@ cat >&2 <<EOF
 Next steps:
   1. Boot the Pi from this image on the colo network.
   2. Add '${fqdn}:' under the 'pis' group in hosts.yaml.
-  3. Onboard it with Ansible, e.g.:
+  3. Onboard it with Ansible (connecting as '${bootstrap_user}'), which
+     installs every admin's keys via ssh.yaml, e.g.:
        ansible-playbook -i hosts.yaml --vault-id dev@secret \\
-         --extra-vars @passwd.yml --limit ${fqdn} \\
+         --extra-vars @passwd.yml --limit ${fqdn} -u ${bootstrap_user} \\
          playbooks/ssh.yaml playbooks/k3s.yaml
 EOF

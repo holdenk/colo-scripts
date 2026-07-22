@@ -7,24 +7,23 @@
 # self-removing first-boot service so the Nano instead comes up on the network
 # with:
 #   * its hostname set (under COLO_DOMAIN, default local.pigscanfly.ca)
-#   * the colo admins (holden, warrick) created with passwordless sudo and their
-#     GitHub SSH keys installed
+#   * a single bootstrap user (the operator running this script, by default)
+#     created with passwordless sudo and the operator's own SSH public key
 #   * ssh enabled, and oem-config masked so nothing blocks on a console
 #
 # That matches what playbooks/ssh.yaml + playbooks/k3s.yaml (the "arm-gpus"
-# group) expect, so once it is up you add it to hosts.yaml and run the usual
-# Ansible flow. The keys are baked in at build time, so no monitor/keyboard and
-# no first-boot internet are needed just to log in.
+# group) need to connect, so once it is up you add it to hosts.yaml and run the
+# usual Ansible flow. The operator's key is baked in at build time, so no
+# monitor/keyboard and no first-boot internet are needed just to log in.
 #
 # Because the seed files are dropped into the rootfs (no chroot / qemu), the
 # host doing the build stays simple; the account creation itself runs natively
 # on the Nano at first boot.
 #
-# Design note: the image only has to get the operator far enough for Ansible to
-# connect; playbooks/ssh.yaml distributes every admin's keys afterward. The
-# intended direction is therefore to bake only the operator's own key here and
-# let ssh.yaml own admin access as the single source of truth -- see the
-# COLO_ADMINS design-decision note in lib/common.sh.
+# Design note: the image only carries the operator's key -- just enough to let
+# Ansible in. playbooks/ssh.yaml then distributes every admin's keys, so it
+# stays the single source of truth for admin access and there is no admin list
+# here to drift out of sync (see lib/common.sh).
 #
 # NOTE: this targets the Jetson *Nano Developer Kit* SD-card image. Production
 # modules (eMMC) are flashed with NVIDIA's SDK Manager / flash.sh instead; the
@@ -47,6 +46,8 @@ output=""
 device=""
 base_image=""
 image_url=""
+bootstrap_user=""
+pubkey=""
 # systemd units for the interactive first-boot wizard, masked so the Nano boots
 # straight through. Space-separated; override for other JetPack releases.
 oem_services="nv-oem-config.service nvfb-early.service nvfb.service oem-config.service"
@@ -63,6 +64,10 @@ Usage: $0 --hostname NAME (--image FILE | --image-url URL) [options]
                         (default: ./jetson-<hostname>.img)
   --device /dev/sdX     after building, dd the image onto this block device
                         (DESTRUCTIVE -- prompts first)
+  --user NAME           bootstrap user to create for Ansible to connect as
+                        (default: the operator running this script)
+  --pubkey FILE         SSH public key to install for that user
+                        (default: the operator's own ~/.ssh key, or \$SSH_PUBKEY)
   --oem-config-service "u1 u2"
                         space-separated systemd units to mask so the console
                         wizard never runs (default: $oem_services)
@@ -70,6 +75,9 @@ Usage: $0 --hostname NAME (--image FILE | --image-url URL) [options]
 
 You must supply the base image with --image or --image-url; NVIDIA requires a
 login to download JetPack, so there is no baked-in default URL.
+
+Only the operator's key is baked in -- just enough for Ansible to connect.
+playbooks/ssh.yaml then installs every admin's keys.
 EOF
   exit "${1:-1}"
 }
@@ -81,6 +89,8 @@ while [[ $# -gt 0 ]]; do
     --device)              device="${2:?}"; shift 2 ;;
     --image)               base_image="${2:?}"; shift 2 ;;
     --image-url)           image_url="${2:?}"; shift 2 ;;
+    --user)                bootstrap_user="${2:?}"; shift 2 ;;
+    --pubkey)              pubkey="${2:?}"; shift 2 ;;
     --oem-config-service)  oem_services="${2:?}"; shift 2 ;;
     -h|--help)             usage 0 ;;
     *)                     warn "unknown argument: $1"; usage ;;
@@ -95,17 +105,13 @@ require_cmds curl losetup mount umount blkid blockdev
 fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-jetson-${short}.img}"
+bootstrap_user="${bootstrap_user:-$(operator_user)}"
 
-# 1. Bake the admins' keys in now so the node needs no internet just to log
-#    in. Each admin gets only their own keys, and every admin must resolve --
-#    a partial set would bake an image some admins can't reach.
-info "fetching admin SSH keys"
-declare -A admin_keys=()
-for entry in "${COLO_ADMINS[@]}"; do
-  user="${entry%%:*}"; gh="${entry##*:}"
-  admin_keys[$user]="$(github_keys "$gh")" \
-    || die "could not fetch SSH keys for github user '$gh' (needed for '$user')"
-done
+# 1. Resolve the operator's key up front (fail-fast, before any multi-GB copy).
+#    Only this one key is baked in -- enough for Ansible to connect, which then
+#    installs every admin's keys via playbooks/ssh.yaml.
+pubkey="$(resolve_bootstrap_key "$pubkey")"
+info "bootstrap user '$bootstrap_user' with key $pubkey"
 
 # 2. Stage a private, re-runnable copy of the base image.
 if [[ -n "$base_image" ]]; then
@@ -138,10 +144,10 @@ log "rootfs partition: $root_part ($fstype)"
 mnt="$(mktemp -d)"
 as_root mount "$root_part" "$mnt"
 
-# 3a. Seed data (hostname, admin list, per-admin keys) consumed by the
-#     first-boot script. Keeping the data out of the script means the script
-#     below is completely static -- no build-time expansion to get wrong, and
-#     each admin's authorized_keys holds only that admin's keys.
+# 3a. Seed data (hostname, bootstrap user, its key) consumed by the first-boot
+#     script. Keeping the data out of the script means the script below is
+#     completely static -- no build-time expansion to get wrong. Only the
+#     operator's bootstrap user is seeded; ssh.yaml adds the rest.
 info "installing first-boot onboarding service for $fqdn"
 seed_dir="$mnt/usr/local/share/colo-onboard"
 as_root install -d -m 0755 "$seed_dir" "$seed_dir/keys"
@@ -149,14 +155,8 @@ as_root tee "$seed_dir/config" >/dev/null <<EOF
 HOSTNAME_FQDN="$fqdn"
 HOSTNAME_SHORT="$short"
 EOF
-{
-  for entry in "${COLO_ADMINS[@]}"; do printf '%s\n' "${entry%%:*}"; done
-} | as_root tee "$seed_dir/admins" >/dev/null
-for entry in "${COLO_ADMINS[@]}"; do
-  user="${entry%%:*}"
-  printf '%s\n' "${admin_keys[$user]}" \
-    | as_root tee "$seed_dir/keys/$user.authorized_keys" >/dev/null
-done
+printf '%s\n' "$bootstrap_user" | as_root tee "$seed_dir/admins" >/dev/null
+as_root cp "$pubkey" "$seed_dir/keys/$bootstrap_user.authorized_keys"
 
 # 3b. First-boot script (static; runs natively on the Nano).
 as_root install -d -m 0755 "$mnt/usr/local/sbin"
@@ -269,8 +269,9 @@ cat >&2 <<EOF
 Next steps:
   1. Boot the Jetson from this image on the colo network (no monitor needed).
   2. Add '${fqdn}:' under the 'arm-gpus' group in hosts.yaml.
-  3. Onboard it with Ansible, e.g.:
+  3. Onboard it with Ansible (connecting as '${bootstrap_user}'), which
+     installs every admin's keys via ssh.yaml, e.g.:
        ansible-playbook -i hosts.yaml --vault-id dev@secret \\
-         --extra-vars @passwd.yml --limit ${fqdn} \\
+         --extra-vars @passwd.yml --limit ${fqdn} -u ${bootstrap_user} \\
          playbooks/ssh.yaml playbooks/k3s.yaml
 EOF
