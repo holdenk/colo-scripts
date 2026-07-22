@@ -18,17 +18,25 @@
 # node running out of disk.
 #
 # Optional overrides (pass via --extra-vars '@passwd.yml' like setup.sh, or
-# -e on the command line). All have safe defaults so a plain run works:
+# -e on the command line). Alert email works out of the box because the SMTP
+# credentials default to the SendGrid creds already in the vault (the same
+# HEALTH_EMAIL_HOST_* vars cluster-setup.yaml uses), so just pass passwd.yml.
 #   grafana_admin_password      Grafana admin login password
+#   grafana_cluster_issuer      cert-manager ClusterIssuer for the Grafana TLS
+#                               cert (default "letsencrypt"; set to
+#                               "letsencrypt-staging" to validate a freshly
+#                               pointed hostname without burning prod rate limits)
 #   alertmanager_email_to       where alerts are emailed (default holden@)
 #   alertmanager_smtp_host      SMTP smarthost host:port (STARTTLS / 587)
 #   alertmanager_smtp_from      From address on alert emails
-#   alertmanager_smtp_user      SMTP auth username (sendgrid uses "apikey")
-#   alertmanager_smtp_password  SMTP auth password / API key
+#   alertmanager_smtp_user      SMTP auth username (defaults to the vault's
+#                               HEALTH_EMAIL_HOST_USER; sendgrid uses "apikey")
+#   alertmanager_smtp_password  SMTP auth password / API key (defaults to the
+#                               vault's HEALTH_EMAIL_HOST_PASSWORD)
 #
-# Run with:
-#   ansible-playbook -i hosts.yaml --extra-vars '@passwd.yml' \
-#     playbooks/monitoring.yaml
+# Run with (the vault id matches setup.sh):
+#   ansible-playbook -i hosts.yaml --vault-id dev@secret \
+#     --extra-vars '@passwd.yml' playbooks/monitoring.yaml
 - hosts: localhost
   vars:
     monitoring_namespace: monitoring
@@ -92,8 +100,8 @@
               resolve_timeout: 5m
               smtp_smarthost: "{{ alertmanager_smtp_host | default('smtp.sendgrid.net:587') }}"
               smtp_from: "{{ alertmanager_smtp_from | default('alertmanager@pigscanfly.ca') }}"
-              smtp_auth_username: "{{ alertmanager_smtp_user | default('apikey') }}"
-              smtp_auth_password: "{{ alertmanager_smtp_password | default('') }}"
+              smtp_auth_username: "{{ alertmanager_smtp_user | default(HEALTH_EMAIL_HOST_USER | default('apikey')) }}"
+              smtp_auth_password: "{{ alertmanager_smtp_password | default(HEALTH_EMAIL_HOST_PASSWORD | default('')) }}"
               smtp_require_tls: true
             route:
               group_by: ['alertname', 'namespace']
@@ -123,7 +131,7 @@
             enabled: true
             ingressClassName: nginx
             annotations:
-              cert-manager.io/cluster-issuer: letsencrypt
+              cert-manager.io/cluster-issuer: "{{ grafana_cluster_issuer | default('letsencrypt') }}"
             hosts:
               - "{{ grafana_host }}"
             tls:
