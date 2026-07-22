@@ -95,6 +95,9 @@ done
 case "$power_action" in on|off|reset|status) ;; *) die "invalid --power: $power_action" ;; esac
 [[ "$power_action" == "status" && ${#flash_map[@]} -gt 0 ]] \
   && die "--flash conflicts with --power status (status is read-only and would silently skip the flash)"
+# probe_node bounds each connect with timeout(1); without it a dropped SYN
+# would block for the kernel's full retry cycle (~2 min) instead of --timeout.
+$do_wait && require_cmds timeout
 
 # Prefer the tpi CLI; fall back to the BMC REST API via curl.
 have_tpi=false
@@ -176,8 +179,11 @@ probe_node() {
     fi
     if $tcp_up; then
       command -v ssh >/dev/null 2>&1 || { echo tcp; return; }
+      # Stateless probe: don't touch the operator's known_hosts, and don't let
+      # a post-reimage host-key change turn a healthy node into a false "tcp".
       if timeout 15 ssh -o BatchMode=yes -o ConnectTimeout=5 \
-           -o StrictHostKeyChecking=accept-new \
+           -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+           -o LogLevel=ERROR \
            "${probe_user}@${host}" true 2>/dev/null; then
         echo auth
         return
