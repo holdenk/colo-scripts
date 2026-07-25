@@ -106,6 +106,7 @@ fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-jetson-${short}.img}"
 bootstrap_user="${bootstrap_user:-$(operator_user)}"
+validate_bootstrap_user "$bootstrap_user"
 
 # 1. Resolve the operator's key up front (fail-fast, before any multi-GB copy).
 #    Only this one key is baked in -- enough for Ansible to connect, which then
@@ -176,16 +177,26 @@ if ! grep -q "$HOSTNAME_FQDN" /etc/hosts 2>/dev/null; then
   printf '127.0.1.1\t%s %s\n' "$HOSTNAME_FQDN" "$HOSTNAME_SHORT" >>/etc/hosts
 fi
 
-while IFS= read -r user; do
+while IFS= read -r user || [ -n "$user" ]; do
   [ -n "$user" ] || continue
   id -u "$user" >/dev/null 2>&1 || useradd -m -s /bin/bash "$user"
   usermod -aG sudo "$user" || true
   group="$(id -gn "$user")"
-  install -d -m 0700 -o "$user" -g "$group" "/home/$user/.ssh"
+  # Real home from passwd -- do NOT assume /home/$user (root's is /root, and
+  # a pre-existing account may live anywhere); writing to the wrong path
+  # installs a key sshd never reads.
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  [ -n "$home" ] || home="/home/$user"
+  install -d -m 0700 -o "$user" -g "$group" "$home/.ssh"
   install -m 0600 -o "$user" -g "$group" \
-    "$CONF_DIR/keys/$user.authorized_keys" "/home/$user/.ssh/authorized_keys"
-  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$user" >"/etc/sudoers.d/90-colo-$user"
-  chmod 0440 "/etc/sudoers.d/90-colo-$user"
+    "$CONF_DIR/keys/$user.authorized_keys" "$home/.ssh/authorized_keys"
+  # sudo's #includedir SILENTLY SKIPS any filename containing a dot, so an
+  # AD/LDAP-style name (holden.karau) would get no sudo at all -- and the
+  # %sudo group fallback can't help because useradd leaves the password
+  # locked. Sanitize the filename; the rule inside still names the real user.
+  safe_name="$(printf '%s' "$user" | tr -c 'a-zA-Z0-9_-' '_')"
+  printf '%s ALL=(ALL) NOPASSWD:ALL\n' "$user" >"/etc/sudoers.d/90-colo-$safe_name"
+  chmod 0440 "/etc/sudoers.d/90-colo-$safe_name"
 done <"$CONF_DIR/admins"
 
 systemctl enable --now ssh 2>/dev/null || true

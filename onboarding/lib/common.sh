@@ -90,7 +90,24 @@ operator_user() {
 operator_home() {
   local home
   home="$(getent passwd "$(operator_user)" 2>/dev/null | cut -d: -f6)"
-  [[ -n "$home" ]] && printf '%s\n' "$home" || printf '%s\n' "$HOME"
+  # ${HOME:-} so a passwd-less UID (arbitrary-UID container, LDAP outage) in a
+  # context without HOME reports "no key found" rather than crashing on an
+  # unbound variable under `set -u`.
+  [[ -n "$home" ]] && printf '%s\n' "$home" || printf '%s\n' "${HOME:-}"
+}
+
+# validate_bootstrap_user <name>  -- die unless <name> is a usable account name.
+# Dots are allowed (AD/LDAP names like holden.karau are real), but the value
+# lands in cloud-init YAML, a seed filename, and useradd, so junk is rejected.
+validate_bootstrap_user() {
+  local u="$1"
+  [[ "$u" =~ ^[a-zA-Z0-9_][a-zA-Z0-9._-]*$ ]] \
+    || die "invalid bootstrap user '$u' (letters, digits, '.', '_' and '-' only)"
+  # root would be a silent brick: sshd reads /root/.ssh, not /home/root, and
+  # Ansible wants an unprivileged account anyway. This fires when the build is
+  # run as root (sudo -i) without --user.
+  [[ "$u" != root ]] \
+    || die "refusing 'root' as the bootstrap user (sshd reads /root/.ssh, and Ansible needs an unprivileged account); pass --user NAME"
 }
 
 # default_pubkey  -- path to the operator's SSH public key, or fail. Honors
@@ -109,16 +126,17 @@ default_pubkey() {
     fi
   done
   # Fall back to the first *.pub; if the glob doesn't match it stays literal,
-  # so the -f test below fails and we report "none found".
+  # so the -f test below fails and we report "none found". ${pubs[0]:-} keeps
+  # that true even if the caller enabled nullglob (empty array under `set -u`).
   local -a pubs=("$home"/.ssh/*.pub)
-  [[ -f "${pubs[0]}" ]] || return 1
+  [[ -f "${pubs[0]:-}" ]] || return 1
   printf '%s\n' "${pubs[0]}"
 }
 
 # emit_cloud_init_bootstrap_user <user> <pubkey-file>  -- print a cloud-init
 # `users:` block for a single bootstrap user carrying the operator's key(s).
 emit_cloud_init_bootstrap_user() {
-  local user="$1" keyfile="$2" line
+  local user="$1" keyfile="$2" line count=0
   printf 'users:\n'
   printf '  - name: %s\n' "$user"
   printf '    groups: [adm, sudo]\n'
@@ -126,7 +144,11 @@ emit_cloud_init_bootstrap_user() {
   printf '    lock_passwd: true\n'
   printf '    sudo: "ALL=(ALL) NOPASSWD:ALL"\n'
   printf '    ssh_authorized_keys:\n'
-  while IFS= read -r line; do
+  # `|| [[ -n "$line" ]]` so a key file with NO trailing newline (pasted into
+  # an editor, produced by `echo -n`) still yields its last line -- otherwise
+  # read returns 1 with the text unconsumed, we emit zero keys, and the node
+  # boots with a passwordless, keyless account: unreachable.
+  while IFS= read -r line || [[ -n "$line" ]]; do
     [[ -n "$line" ]] || continue
     # YAML single-quoted style: everything is literal except '' (an escaped
     # quote). Key *comments* are free-form and may contain " or \ (e.g.
@@ -134,7 +156,9 @@ emit_cloud_init_bootstrap_user() {
     # into unparseable YAML -- cloud-init would then silently skip user
     # creation and the node would boot with no way in.
     printf "      - '%s'\n" "${line//\'/\'\'}"
+    count=$((count + 1))
   done <"$keyfile"
+  [[ $count -gt 0 ]] || die "no SSH keys found in $keyfile"
 }
 
 # resolve_bootstrap_key <pubkey-arg>  -- echo a validated pubkey path, dying
@@ -145,8 +169,11 @@ resolve_bootstrap_key() {
     pubkey="$(default_pubkey)" || die \
       "no SSH public key found for operator '$(operator_user)' in $(operator_home)/.ssh; pass --pubkey FILE or run ssh-keygen"
   fi
-  [[ -f "$pubkey" ]] || die "--pubkey not found: $pubkey"
-  local first
+  [[ -f "$pubkey" ]] || die "--pubkey is not a readable file: $pubkey"
+  [[ -r "$pubkey" ]] || die "--pubkey is not readable (permissions?): $pubkey"
+  # first='' so an unreadable/empty file reports a key problem rather than
+  # tripping `set -u` on an unset variable after a failed redirection.
+  local first=''
   IFS= read -r first <"$pubkey" || true
   case "$first" in
     ssh-*|ecdsa-*|sk-ssh-*|sk-ecdsa-*) ;;

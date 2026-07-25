@@ -103,6 +103,7 @@ fqdn="$(fully_qualify "$hostname")"
 short="${fqdn%%.*}"
 output="${output:-pi-${short}.img}"
 bootstrap_user="${bootstrap_user:-$(operator_user)}"
+validate_bootstrap_user "$bootstrap_user"
 
 # 1. Resolve the operator's key up front (fail-fast, before any multi-GB copy).
 pubkey="$(resolve_bootstrap_key "$pubkey")"

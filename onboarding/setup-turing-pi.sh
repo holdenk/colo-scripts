@@ -170,7 +170,7 @@ node_hostname() {
 }
 
 # probe_node <host> <timeout>  -- watch for the node to come up; prints one of
-#   auth  ssh key auth as the first admin works (truly ready for Ansible)
+#   auth  ssh key auth as the bootstrap user works (truly ready for Ansible)
 #   tcp   port 22 open but key auth unconfirmed (first-boot onboarding may
 #         still be running, or no matching key is loaded on this workstation)
 #   down  nothing answered before the deadline
