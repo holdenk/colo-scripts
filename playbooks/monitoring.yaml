@@ -7,15 +7,40 @@
 #   - node-exporter + kube-state-metrics (the metrics sources)
 #   - Grafana (dashboards, exposed at https://grafana.pigscanfly.ca)
 #
-# Persistence uses the existing Longhorn storage class, and the Grafana
-# ingress reuses the cluster's nginx + cert-manager (letsencrypt) setup, so
-# this follows the same conventions as the rest of cluster-setup.yaml.
+# The Grafana ingress reuses the cluster's nginx + cert-manager (letsencrypt)
+# setup, so that part follows the same conventions as cluster-setup.yaml.
+#
+# Persistence deliberately does NOT use Longhorn. Prometheus, Alertmanager
+# and Grafana each want one ReadWriteOnce volume that only ever has a single
+# writer, which is the case Longhorn's replication buys nothing for, and a
+# volume that binds but never attaches takes the whole monitoring stack down
+# -- including the alerting that would have told you. k3s' built-in
+# local-path provisioner keeps each volume on the node the pod runs on, with
+# no attach step to fail. The trade-off: the PV pins its pod to that node, so
+# if the node is gone so is the data (15 days of metrics and the Grafana DB;
+# dashboards and alert rules live in this file and the chart, not in there).
+# Note it also puts that data on the node's root disk, not on the encrypted
+# /db/encrypted mount Longhorn uses.
+#
+#   -e monitoring_storage_class=longhorn   go back to Longhorn
+#   -e monitoring_reset_storage=true       DELETE the existing claims first,
+#                                          which is required when changing
+#                                          the class (storageClassName is
+#                                          immutable on an existing PVC, and
+#                                          the operator reuses same-named
+#                                          claims) and is how you clear out
+#                                          volumes that will not attach
 #
 # "Minimal alerting" means: the stack's sensible default Kubernetes/node
 # alert rules PLUS a small curated PrometheusRule (see the bottom of this
 # file) covering the handful of homelab failures you actually want a page
 # for -- a target/instance going down, a node running out of memory, and a
 # node running out of disk.
+#
+# The chart's kube-controller-manager / kube-scheduler / kube-proxy / etcd
+# exporters are turned off below because k3s does not expose those the way
+# the chart expects; leaving them on means permanent false alerts. See the
+# comment on those values for the details.
 #
 # REQUIRED (add to the vault-encrypted passwd.yml; the play fails without it):
 #   grafana_admin_password      Grafana admin login password. Deliberately has
@@ -39,14 +64,42 @@
 #                               HEALTH_EMAIL_HOST_USER; sendgrid uses "apikey")
 #   alertmanager_smtp_password  SMTP auth password / API key (defaults to the
 #                               vault's HEALTH_EMAIL_HOST_PASSWORD)
+#   kube_prometheus_stack_version  chart version to install (pinned below, same
+#                               convention as the pinned ingress-nginx and
+#                               cert-manager releases in cluster-setup.yaml)
 #
 # Run with (the vault id matches setup.sh):
 #   ansible-playbook -i hosts.yaml --vault-id dev@secret \
 #     --extra-vars '@passwd.yml' playbooks/monitoring.yaml
+#
+# If the Helm step appears to hang: `helm ... --wait` blocks until the
+# Deployments/DaemonSets it owns are Ready (prometheus-operator,
+# kube-state-metrics, Grafana, node-exporter) plus the admission-webhook
+# cert hook Jobs, and prints nothing at all while it does. It does NOT wait
+# for Prometheus/Alertmanager themselves -- those are custom resources the
+# operator reconciles afterwards, so this play waits for them explicitly
+# further down. When the wait runs out, Helm reports it as
+#   Error: UPGRADE FAILED: client rate limiter Wait returned an error:
+#   rate: Wait(n=1) would exceed context deadline
+# which reads like a throttling problem but just means the deadline passed
+# with something still not Ready. The usual causes are a volume that never
+# attaches (pods sit in Init:0/1 with their PVC showing Bound), a Grafana
+# rollout deadlocked on its ReadWriteOnce volume (see deploymentStrategy
+# below), or node-exporter unable to bind host port 9100. The rescue block
+# below dumps which of those it was instead of just timing out.
 - hosts: localhost
   vars:
     monitoring_namespace: monitoring
     grafana_host: grafana.pigscanfly.ca
+    # Pin the chart so a re-run cannot silently pull a new major version.
+    kube_prometheus_stack_version: 87.19.1
+    # k3s' built-in Rancher local-path provisioner. See the header for why
+    # this is not Longhorn.
+    monitoring_storage_class: local-path
+    # Resolve the SMTP creds once so the assert below and the Alertmanager
+    # config cannot drift apart.
+    alertmanager_smtp_user_effective: "{{ alertmanager_smtp_user | default(HEALTH_EMAIL_HOST_USER | default('apikey')) }}"
+    alertmanager_smtp_password_effective: "{{ alertmanager_smtp_password | default(HEALTH_EMAIL_HOST_PASSWORD | default('')) }}"
   tasks:
   - name: Add prometheus-community Helm repo
     kubernetes.core.helm_repository:
@@ -59,95 +112,320 @@
       api_version: v1
       kind: Namespace
       state: present
-  - name: Deploy kube-prometheus-stack (Prometheus, Alertmanager, Grafana)
-    kubernetes.core.helm:
-      name: kube-prometheus-stack
-      chart_ref: prometheus-community/kube-prometheus-stack
-      release_namespace: "{{ monitoring_namespace }}"
-      create_namespace: false
-      wait: yes
-      wait_timeout: 600s
-      values:
-        # Ship the standard Kubernetes/node alert rules. This is the sensible
-        # baseline "minimal" alerting; our extra rules are added below.
-        defaultRules:
-          create: true
-        prometheus:
-          prometheusSpec:
-            retention: 15d
-            # Pick up every ServiceMonitor/PodMonitor/PrometheusRule in the
-            # cluster, not just ones tagged with this Helm release. Lets other
-            # namespaces expose metrics and rules without extra wiring.
-            serviceMonitorSelectorNilUsesHelmValues: false
-            podMonitorSelectorNilUsesHelmValues: false
-            ruleSelectorNilUsesHelmValues: false
-            probeSelectorNilUsesHelmValues: false
-            scrapeConfigSelectorNilUsesHelmValues: false
-            storageSpec:
-              volumeClaimTemplate:
-                spec:
-                  storageClassName: longhorn
-                  accessModes: ["ReadWriteOnce"]
-                  resources:
-                    requests:
-                      storage: 20Gi
-        alertmanager:
-          alertmanagerSpec:
-            storage:
-              volumeClaimTemplate:
-                spec:
-                  storageClassName: longhorn
-                  accessModes: ["ReadWriteOnce"]
-                  resources:
-                    requests:
-                      storage: 5Gi
-          config:
-            global:
-              resolve_timeout: 5m
-              smtp_smarthost: "{{ alertmanager_smtp_host | default('smtp.sendgrid.net:587') }}"
-              smtp_from: "{{ alertmanager_smtp_from | default('alertmanager@pigscanfly.ca') }}"
-              smtp_auth_username: "{{ alertmanager_smtp_user | default(HEALTH_EMAIL_HOST_USER | default('apikey')) }}"
-              smtp_auth_password: "{{ alertmanager_smtp_password | default(HEALTH_EMAIL_HOST_PASSWORD | default('')) }}"
-              smtp_require_tls: true
-            route:
-              group_by: ['alertname', 'namespace']
-              group_wait: 30s
-              group_interval: 5m
-              repeat_interval: 4h
-              receiver: email
-              routes:
-                # Watchdog always fires by design (dead-man's switch); don't
-                # email about it. Point an external uptime check at it instead.
-                - matchers:
-                    - alertname = "Watchdog"
-                  receiver: "null"
-            receivers:
-              - name: "null"
-              - name: email
-                email_configs:
-                  - to: "{{ alertmanager_email_to | default('holden@pigscanfly.ca') }}"
-                    send_resolved: true
-        grafana:
-          # No default on purpose: Grafana is published on a public hostname,
-          # and the chart only seeds this into its persistent DB on FIRST boot,
-          # so a placeholder here would silently become the permanent password.
-          # Fail the play instead if the vault has no grafana_admin_password.
-          adminPassword: "{{ grafana_admin_password }}"
-          persistence:
-            enabled: true
-            storageClassName: longhorn
-            size: 5Gi
-          ingress:
-            enabled: true
-            ingressClassName: nginx
-            annotations:
-              cert-manager.io/cluster-issuer: "{{ grafana_cluster_issuer | default('letsencrypt') }}"
-            hosts:
-              - "{{ grafana_host }}"
-            tls:
-              - secretName: grafana-tls
-                hosts:
-                  - "{{ grafana_host }}"
+  # Alertmanager loads a config with an empty smtp_auth_password happily and
+  # only fails when it tries to send, i.e. exactly when you need the alert.
+  # Catch it here instead.
+  - name: Require SMTP credentials for alert email
+    ansible.builtin.assert:
+      that:
+        - alertmanager_smtp_password_effective | length > 0
+      fail_msg: >-
+        No SMTP password available: pass --extra-vars '@passwd.yml' (for
+        HEALTH_EMAIL_HOST_PASSWORD) or set alertmanager_smtp_password.
+        Without it Alertmanager comes up but silently fails to send email.
+      quiet: true
+  # Opt-in, and it throws away the metrics history: a PVC's storageClassName
+  # is immutable, so switching monitoring_storage_class needs the old claims
+  # gone. Helm and the operator rebuild all of this on the next task.
+  - name: Reset monitoring storage
+    when: monitoring_reset_storage | default(false) | bool
+    block:
+    # Delete the custom resources, not the StatefulSets they generate: the
+    # operator owns those and puts them straight back, and a recreated pod
+    # holds its claim open so the delete below would sit on the
+    # pvc-protection finalizer until it timed out. Removing the CR garbage
+    # collects the StatefulSet with it, and Helm recreates the CR.
+    - name: Delete the Prometheus and Alertmanager custom resources
+      kubernetes.core.k8s:
+        state: absent
+        api_version: monitoring.coreos.com/v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+      loop:
+        - {kind: Prometheus, name: kube-prometheus-stack-prometheus}
+        - {kind: Alertmanager, name: kube-prometheus-stack-alertmanager}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+    - name: Delete the Grafana Deployment
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: kube-prometheus-stack-grafana
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+    # Garbage collection of the StatefulSets and their pods is asynchronous,
+    # and a pod that still references a claim keeps it undeletable.
+    - name: Wait for the pods holding the volumes to go away
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+      register: volume_holder_pods
+      until: >-
+        (volume_holder_pods.resources | default([])
+         | map(attribute='metadata.name')
+         | select('match', '^(prometheus|alertmanager)-kube-prometheus-stack|^kube-prometheus-stack-grafana')
+         | list | length) == 0
+      retries: 30
+      delay: 5
+    - name: Find the existing claims
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ monitoring_namespace }}"
+      register: existing_monitoring_pvcs
+    - name: Delete the existing claims
+      kubernetes.core.k8s:
+        state: absent
+        kind: PersistentVolumeClaim
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+      loop: "{{ existing_monitoring_pvcs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+  # Otherwise this surfaces as a Helm error about forbidden updates to a PVC
+  # spec, ten minutes into a run.
+  - name: Look for claims left on a different storage class
+    kubernetes.core.k8s_info:
+      kind: PersistentVolumeClaim
+      namespace: "{{ monitoring_namespace }}"
+    register: current_monitoring_pvcs
+  - name: Fail early if the storage class changed
+    ansible.builtin.fail:
+      msg: >-
+        These claims are on a different storage class than
+        monitoring_storage_class ({{ monitoring_storage_class }}):
+        {{ mismatched_pvcs | map(attribute='metadata.name') | list }}.
+        storageClassName cannot be changed in place -- re-run with
+        -e monitoring_reset_storage=true to delete them first, which also
+        deletes the metrics history they hold.
+    vars:
+      mismatched_pvcs: >-
+        {{ current_monitoring_pvcs.resources | default([])
+           | selectattr('spec.storageClassName', 'defined')
+           | rejectattr('spec.storageClassName', 'equalto', monitoring_storage_class)
+           | list }}
+    when: mismatched_pvcs | length > 0
+  - name: Deploy and verify the monitoring stack
+    block:
+    - name: Deploy kube-prometheus-stack (Prometheus, Alertmanager, Grafana)
+      kubernetes.core.helm:
+        name: kube-prometheus-stack
+        chart_ref: prometheus-community/kube-prometheus-stack
+        chart_version: "{{ kube_prometheus_stack_version }}"
+        release_namespace: "{{ monitoring_namespace }}"
+        create_namespace: false
+        wait: yes
+        # Generous: a first install pulls ~1GB of images across the nodes
+        # before anything reports Ready.
+        wait_timeout: 900s
+        values:
+          # Ship the standard Kubernetes/node alert rules. This is the sensible
+          # baseline "minimal" alerting; our extra rules are added below.
+          defaultRules:
+            create: true
+          # k3s runs the control plane as one process and binds the
+          # controller-manager/scheduler/kube-proxy metrics endpoints to
+          # 127.0.0.1, and this cluster's datastore is k3s' embedded one rather
+          # than a scrapable etcd. Leaving these exporters on (the chart
+          # default) creates Services with no endpoints, which makes
+          # KubeControllerManagerDown / KubeSchedulerDown / KubeProxyDown and
+          # the etcd rules fire forever -- a permanent false page every 4h that
+          # trains you to ignore the mailbox. Turning them off also drops the
+          # matching default rules, since the chart gates those on .enabled.
+          kubeControllerManager:
+            enabled: false
+          kubeScheduler:
+            enabled: false
+          kubeProxy:
+            enabled: false
+          kubeEtcd:
+            enabled: false
+          prometheus:
+            prometheusSpec:
+              retention: 15d
+              # Pick up every ServiceMonitor/PodMonitor/PrometheusRule in the
+              # cluster, not just ones tagged with this Helm release. Lets other
+              # namespaces expose metrics and rules without extra wiring.
+              serviceMonitorSelectorNilUsesHelmValues: false
+              podMonitorSelectorNilUsesHelmValues: false
+              ruleSelectorNilUsesHelmValues: false
+              probeSelectorNilUsesHelmValues: false
+              scrapeConfigSelectorNilUsesHelmValues: false
+              storageSpec:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: "{{ monitoring_storage_class }}"
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 20Gi
+          alertmanager:
+            alertmanagerSpec:
+              storage:
+                volumeClaimTemplate:
+                  spec:
+                    storageClassName: "{{ monitoring_storage_class }}"
+                    accessModes: ["ReadWriteOnce"]
+                    resources:
+                      requests:
+                        storage: 5Gi
+            config:
+              global:
+                resolve_timeout: 5m
+                smtp_smarthost: "{{ alertmanager_smtp_host | default('smtp.sendgrid.net:587') }}"
+                smtp_from: "{{ alertmanager_smtp_from | default('alertmanager@pigscanfly.ca') }}"
+                smtp_auth_username: "{{ alertmanager_smtp_user_effective }}"
+                smtp_auth_password: "{{ alertmanager_smtp_password_effective }}"
+                smtp_require_tls: true
+              route:
+                group_by: ['alertname', 'namespace']
+                group_wait: 30s
+                group_interval: 5m
+                repeat_interval: 4h
+                receiver: email
+                routes:
+                  # Watchdog always fires by design (dead-man's switch); don't
+                  # email about it. Point an external uptime check at it instead.
+                  - matchers:
+                      - alertname = "Watchdog"
+                    receiver: "null"
+              receivers:
+                - name: "null"
+                - name: email
+                  email_configs:
+                    - to: "{{ alertmanager_email_to | default('holden@pigscanfly.ca') }}"
+                      send_resolved: true
+          grafana:
+            # No default on purpose: Grafana is published on a public hostname,
+            # and the chart only seeds this into its persistent DB on FIRST boot,
+            # so a placeholder here would silently become the permanent password.
+            # Fail the play instead if the vault has no grafana_admin_password.
+            adminPassword: "{{ grafana_admin_password }}"
+            persistence:
+              enabled: true
+              storageClassName: "{{ monitoring_storage_class }}"
+              size: 5Gi
+            # The Grafana subchart defaults to RollingUpdate, which deadlocks
+            # against a ReadWriteOnce Longhorn volume: with one replica the
+            # old pod may not be evicted until the new one is Ready, and the
+            # new one cannot start because Longhorn will not attach the volume
+            # to a second node ("Multi-Attach error"). That is a `helm upgrade
+            # --wait` that sits there until the timeout. Recreate stops the old
+            # pod first, which is what a single-replica Grafana wants anyway.
+            deploymentStrategy:
+              type: Recreate
+            ingress:
+              enabled: true
+              ingressClassName: nginx
+              annotations:
+                cert-manager.io/cluster-issuer: "{{ grafana_cluster_issuer | default('letsencrypt') }}"
+              hosts:
+                - "{{ grafana_host }}"
+              tls:
+                - secretName: grafana-tls
+                  hosts:
+                    - "{{ grafana_host }}"
+    # `helm --wait` only covers the resources Helm itself owns. Prometheus and
+    # Alertmanager are custom resources the operator reconciles into
+    # StatefulSets afterwards, so a green Helm run says nothing about whether
+    # alerting actually came up. Wait for them here, or a broken PVC / crashing
+    # Alertmanager gets reported as success.
+    - name: Wait for Prometheus to become available
+      kubernetes.core.k8s_info:
+        api_version: monitoring.coreos.com/v1
+        kind: Prometheus
+        namespace: "{{ monitoring_namespace }}"
+      register: prometheus_cr
+      until: >-
+        (prometheus_cr.resources | default([]) | length > 0)
+        and ((prometheus_cr.resources[0].status.availableReplicas | default(0)) >= 1)
+      retries: 60
+      delay: 10
+    - name: Wait for Alertmanager to become available
+      kubernetes.core.k8s_info:
+        api_version: monitoring.coreos.com/v1
+        kind: Alertmanager
+        namespace: "{{ monitoring_namespace }}"
+      register: alertmanager_cr
+      until: >-
+        (alertmanager_cr.resources | default([]) | length > 0)
+        and ((alertmanager_cr.resources[0].status.availableReplicas | default(0)) >= 1)
+      retries: 60
+      delay: 10
+    rescue:
+    # Everything above fails the same boring way -- a wait that ran out -- and
+    # the useful detail is in the namespace, not in the Helm error. Dump it.
+    - name: Collect pods
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+      register: monitoring_pods
+    - name: Collect PersistentVolumeClaims
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ monitoring_namespace }}"
+      register: monitoring_pvcs
+    - name: Collect warning events
+      kubernetes.core.k8s_info:
+        kind: Event
+        namespace: "{{ monitoring_namespace }}"
+      register: monitoring_events
+    # A pod wedged on a volume shows up as Init:0/1 with an empty init
+    # container state, so print both sets of statuses rather than guessing.
+    - name: Show pods that never became ready
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.name }}
+          phase={{ item.status.phase | default('?') }}
+          node={{ item.spec.nodeName | default('unscheduled') }}
+          init={{ item.status.initContainerStatuses | default([])
+                  | selectattr('state.waiting', 'defined')
+                  | map(attribute='state.waiting.reason') | list }}
+          waiting={{ item.status.containerStatuses | default([])
+                     | selectattr('state.waiting', 'defined')
+                     | map(attribute='state.waiting.reason') | list }}
+      loop: "{{ monitoring_pods.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+      when: >-
+        (item.status.conditions | default([])
+         | selectattr('type', 'equalto', 'Ready')
+         | map(attribute='status') | first | default('False')) != 'True'
+    # Bound is not the same as attached: a claim can sit here looking healthy
+    # while the pod waits forever for the volume, so print the class too.
+    - name: Show every claim and its class
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.metadata.name }}
+          phase={{ item.status.phase | default('?') }}
+          class={{ item.spec.storageClassName | default('(default)') }}
+      loop: "{{ monitoring_pvcs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+    - name: Show recent warning events
+      ansible.builtin.debug:
+        msg: >-
+          {{ item.involvedObject.name | default('?') }}:
+          {{ item.reason | default('?') }}: {{ item.message | default('') }}
+      loop: >-
+        {{ (monitoring_events.resources | default([])
+            | selectattr('type', 'defined')
+            | selectattr('type', 'equalto', 'Warning') | list)[-25:] }}
+      loop_control:
+        label: "{{ item.involvedObject.name | default('?') }}"
+    - name: Fail with the likely causes
+      ansible.builtin.fail:
+        msg: >-
+          The monitoring stack did not come up (see the pod/PVC/event dump
+          above). Most likely one of: a volume that binds but never attaches,
+          which looks like pods stuck in Init with a Bound claim (re-run with
+          -e monitoring_reset_storage=true to clear the old claims out);
+          node-exporter unable to bind host port 9100 because a node already
+          runs one (it uses hostNetwork); an image pull failure; or a Grafana
+          rollout stuck on its ReadWriteOnce volume.
   # A small, human-readable set of extra alerts on top of the stack defaults.
   # These are the failures you actually want to hear about on a homelab.
   - name: Apply minimal homelab alert rules
