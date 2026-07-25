@@ -64,6 +64,9 @@
 #                               HEALTH_EMAIL_HOST_USER; sendgrid uses "apikey")
 #   alertmanager_smtp_password  SMTP auth password / API key (defaults to the
 #                               vault's HEALTH_EMAIL_HOST_PASSWORD)
+#                               Both of these treat an empty or null value the
+#                               same as unset, i.e. they fall back to the vault
+#                               creds rather than overriding them with nothing.
 #   kube_prometheus_stack_version  chart version to install (pinned below, same
 #                               convention as the pinned ingress-nginx and
 #                               cert-manager releases in cluster-setup.yaml)
@@ -98,8 +101,26 @@
     monitoring_storage_class: local-path
     # Resolve the SMTP creds once so the assert below and the Alertmanager
     # config cannot drift apart.
-    alertmanager_smtp_user_effective: "{{ alertmanager_smtp_user | default(HEALTH_EMAIL_HOST_USER | default('apikey')) }}"
-    alertmanager_smtp_password_effective: "{{ alertmanager_smtp_password | default(HEALTH_EMAIL_HOST_PASSWORD | default('')) }}"
+    #
+    # Fall back on truthiness, not just on definedness. `| default(x)` only
+    # substitutes when a variable is UNDEFINED, so a variable that is defined
+    # but empty -- a placeholder key left blank in passwd.yml, or a bare
+    # `-e alertmanager_smtp_password=` on the command line -- wins over the
+    # fallback instead of falling through to it. That fails quietly in the
+    # worst way: the username resolves to "" and the password trips the assert
+    # below with a message telling you the vault creds are missing when they
+    # are in fact right there. A null (`alertmanager_smtp_password:` with no
+    # value) is worse still -- it gets past `default()` too and then blows up
+    # in the assert as "object of type 'NoneType' has no len()". The
+    # `default('', true)` form normalizes undefined/null/empty alike, so the
+    # `or` chain below picks the first credential that actually has a value.
+    alertmanager_smtp_user_effective: >-
+      {{ alertmanager_smtp_user | default('', true)
+         or HEALTH_EMAIL_HOST_USER | default('', true)
+         or 'apikey' }}
+    alertmanager_smtp_password_effective: >-
+      {{ alertmanager_smtp_password | default('', true)
+         or HEALTH_EMAIL_HOST_PASSWORD | default('', true) }}
   tasks:
   - name: Add prometheus-community Helm repo
     kubernetes.core.helm_repository:
@@ -122,6 +143,9 @@
       fail_msg: >-
         No SMTP password available: pass --extra-vars '@passwd.yml' (for
         HEALTH_EMAIL_HOST_PASSWORD) or set alertmanager_smtp_password.
+        If you are already passing passwd.yml, check that
+        HEALTH_EMAIL_HOST_PASSWORD in it has a value -- a key that is present
+        but blank reads the same as a missing one here.
         Without it Alertmanager comes up but silently fails to send email.
       quiet: true
   # Opt-in, and it throws away the metrics history: a PVC's storageClassName
