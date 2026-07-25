@@ -126,25 +126,50 @@
       quiet: true
   # Opt-in, and it throws away the metrics history: a PVC's storageClassName
   # is immutable, so switching monitoring_storage_class needs the old claims
-  # gone. Deleting the workloads first lets the volumes detach; the operator
-  # and Helm recreate both on the next task.
+  # gone. Helm and the operator rebuild all of this on the next task.
   - name: Reset monitoring storage
     when: monitoring_reset_storage | default(false) | bool
     block:
-    - name: Delete the workloads holding the volumes
+    # Delete the custom resources, not the StatefulSets they generate: the
+    # operator owns those and puts them straight back, and a recreated pod
+    # holds its claim open so the delete below would sit on the
+    # pvc-protection finalizer until it timed out. Removing the CR garbage
+    # collects the StatefulSet with it, and Helm recreates the CR.
+    - name: Delete the Prometheus and Alertmanager custom resources
       kubernetes.core.k8s:
         state: absent
-        api_version: apps/v1
+        api_version: monitoring.coreos.com/v1
         kind: "{{ item.kind }}"
         name: "{{ item.name }}"
         namespace: "{{ monitoring_namespace }}"
         wait: yes
       loop:
-        - {kind: StatefulSet, name: prometheus-kube-prometheus-stack-prometheus}
-        - {kind: StatefulSet, name: alertmanager-kube-prometheus-stack-alertmanager}
-        - {kind: Deployment, name: kube-prometheus-stack-grafana}
+        - {kind: Prometheus, name: kube-prometheus-stack-prometheus}
+        - {kind: Alertmanager, name: kube-prometheus-stack-alertmanager}
       loop_control:
         label: "{{ item.kind }}/{{ item.name }}"
+    - name: Delete the Grafana Deployment
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: Deployment
+        name: kube-prometheus-stack-grafana
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+    # Garbage collection of the StatefulSets and their pods is asynchronous,
+    # and a pod that still references a claim keeps it undeletable.
+    - name: Wait for the pods holding the volumes to go away
+      kubernetes.core.k8s_info:
+        kind: Pod
+        namespace: "{{ monitoring_namespace }}"
+      register: volume_holder_pods
+      until: >-
+        (volume_holder_pods.resources | default([])
+         | map(attribute='metadata.name')
+         | select('match', '^(prometheus|alertmanager)-kube-prometheus-stack|^kube-prometheus-stack-grafana')
+         | list | length) == 0
+      retries: 30
+      delay: 5
     - name: Find the existing claims
       kubernetes.core.k8s_info:
         kind: PersistentVolumeClaim
