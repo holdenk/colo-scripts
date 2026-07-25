@@ -7,9 +7,29 @@
 #   - node-exporter + kube-state-metrics (the metrics sources)
 #   - Grafana (dashboards, exposed at https://grafana.pigscanfly.ca)
 #
-# Persistence uses the existing Longhorn storage class, and the Grafana
-# ingress reuses the cluster's nginx + cert-manager (letsencrypt) setup, so
-# this follows the same conventions as the rest of cluster-setup.yaml.
+# The Grafana ingress reuses the cluster's nginx + cert-manager (letsencrypt)
+# setup, so that part follows the same conventions as cluster-setup.yaml.
+#
+# Persistence deliberately does NOT use Longhorn. Prometheus, Alertmanager
+# and Grafana each want one ReadWriteOnce volume that only ever has a single
+# writer, which is the case Longhorn's replication buys nothing for, and a
+# volume that binds but never attaches takes the whole monitoring stack down
+# -- including the alerting that would have told you. k3s' built-in
+# local-path provisioner keeps each volume on the node the pod runs on, with
+# no attach step to fail. The trade-off: the PV pins its pod to that node, so
+# if the node is gone so is the data (15 days of metrics and the Grafana DB;
+# dashboards and alert rules live in this file and the chart, not in there).
+# Note it also puts that data on the node's root disk, not on the encrypted
+# /db/encrypted mount Longhorn uses.
+#
+#   -e monitoring_storage_class=longhorn   go back to Longhorn
+#   -e monitoring_reset_storage=true       DELETE the existing claims first,
+#                                          which is required when changing
+#                                          the class (storageClassName is
+#                                          immutable on an existing PVC, and
+#                                          the operator reuses same-named
+#                                          claims) and is how you clear out
+#                                          volumes that will not attach
 #
 # "Minimal alerting" means: the stack's sensible default Kubernetes/node
 # alert rules PLUS a small curated PrometheusRule (see the bottom of this
@@ -55,20 +75,27 @@
 # If the Helm step appears to hang: `helm ... --wait` blocks until the
 # Deployments/DaemonSets it owns are Ready (prometheus-operator,
 # kube-state-metrics, Grafana, node-exporter) plus the admission-webhook
-# cert hook Jobs. It does NOT wait for Prometheus/Alertmanager themselves --
-# those are custom resources the operator reconciles afterwards, so this
-# play waits for them explicitly further down. The three things that
-# actually stall the Helm wait here are: a Longhorn PVC that will not bind,
-# a Grafana rollout deadlocked on its ReadWriteOnce volume (see
-# deploymentStrategy below), and node-exporter failing to bind host port
-# 9100 because something else on a node already has it. The rescue block
-# below dumps exactly which of those it was instead of just timing out.
+# cert hook Jobs, and prints nothing at all while it does. It does NOT wait
+# for Prometheus/Alertmanager themselves -- those are custom resources the
+# operator reconciles afterwards, so this play waits for them explicitly
+# further down. When the wait runs out, Helm reports it as
+#   Error: UPGRADE FAILED: client rate limiter Wait returned an error:
+#   rate: Wait(n=1) would exceed context deadline
+# which reads like a throttling problem but just means the deadline passed
+# with something still not Ready. The usual causes are a volume that never
+# attaches (pods sit in Init:0/1 with their PVC showing Bound), a Grafana
+# rollout deadlocked on its ReadWriteOnce volume (see deploymentStrategy
+# below), or node-exporter unable to bind host port 9100. The rescue block
+# below dumps which of those it was instead of just timing out.
 - hosts: localhost
   vars:
     monitoring_namespace: monitoring
     grafana_host: grafana.pigscanfly.ca
     # Pin the chart so a re-run cannot silently pull a new major version.
     kube_prometheus_stack_version: 87.19.1
+    # k3s' built-in Rancher local-path provisioner. See the header for why
+    # this is not Longhorn.
+    monitoring_storage_class: local-path
     # Resolve the SMTP creds once so the assert below and the Alertmanager
     # config cannot drift apart.
     alertmanager_smtp_user_effective: "{{ alertmanager_smtp_user | default(HEALTH_EMAIL_HOST_USER | default('apikey')) }}"
@@ -97,6 +124,65 @@
         HEALTH_EMAIL_HOST_PASSWORD) or set alertmanager_smtp_password.
         Without it Alertmanager comes up but silently fails to send email.
       quiet: true
+  # Opt-in, and it throws away the metrics history: a PVC's storageClassName
+  # is immutable, so switching monitoring_storage_class needs the old claims
+  # gone. Deleting the workloads first lets the volumes detach; the operator
+  # and Helm recreate both on the next task.
+  - name: Reset monitoring storage
+    when: monitoring_reset_storage | default(false) | bool
+    block:
+    - name: Delete the workloads holding the volumes
+      kubernetes.core.k8s:
+        state: absent
+        api_version: apps/v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+      loop:
+        - {kind: StatefulSet, name: prometheus-kube-prometheus-stack-prometheus}
+        - {kind: StatefulSet, name: alertmanager-kube-prometheus-stack-alertmanager}
+        - {kind: Deployment, name: kube-prometheus-stack-grafana}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+    - name: Find the existing claims
+      kubernetes.core.k8s_info:
+        kind: PersistentVolumeClaim
+        namespace: "{{ monitoring_namespace }}"
+      register: existing_monitoring_pvcs
+    - name: Delete the existing claims
+      kubernetes.core.k8s:
+        state: absent
+        kind: PersistentVolumeClaim
+        name: "{{ item.metadata.name }}"
+        namespace: "{{ monitoring_namespace }}"
+        wait: yes
+      loop: "{{ existing_monitoring_pvcs.resources | default([]) }}"
+      loop_control:
+        label: "{{ item.metadata.name }}"
+  # Otherwise this surfaces as a Helm error about forbidden updates to a PVC
+  # spec, ten minutes into a run.
+  - name: Look for claims left on a different storage class
+    kubernetes.core.k8s_info:
+      kind: PersistentVolumeClaim
+      namespace: "{{ monitoring_namespace }}"
+    register: current_monitoring_pvcs
+  - name: Fail early if the storage class changed
+    ansible.builtin.fail:
+      msg: >-
+        These claims are on a different storage class than
+        monitoring_storage_class ({{ monitoring_storage_class }}):
+        {{ mismatched_pvcs | map(attribute='metadata.name') | list }}.
+        storageClassName cannot be changed in place -- re-run with
+        -e monitoring_reset_storage=true to delete them first, which also
+        deletes the metrics history they hold.
+    vars:
+      mismatched_pvcs: >-
+        {{ current_monitoring_pvcs.resources | default([])
+           | selectattr('spec.storageClassName', 'defined')
+           | rejectattr('spec.storageClassName', 'equalto', monitoring_storage_class)
+           | list }}
+    when: mismatched_pvcs | length > 0
   - name: Deploy and verify the monitoring stack
     block:
     - name: Deploy kube-prometheus-stack (Prometheus, Alertmanager, Grafana)
@@ -107,8 +193,8 @@
         release_namespace: "{{ monitoring_namespace }}"
         create_namespace: false
         wait: yes
-        # Generous: a first install pulls ~1GB of images across the nodes and
-        # provisions Longhorn volumes before anything reports Ready.
+        # Generous: a first install pulls ~1GB of images across the nodes
+        # before anything reports Ready.
         wait_timeout: 900s
         values:
           # Ship the standard Kubernetes/node alert rules. This is the sensible
@@ -146,7 +232,7 @@
               storageSpec:
                 volumeClaimTemplate:
                   spec:
-                    storageClassName: longhorn
+                    storageClassName: "{{ monitoring_storage_class }}"
                     accessModes: ["ReadWriteOnce"]
                     resources:
                       requests:
@@ -156,7 +242,7 @@
               storage:
                 volumeClaimTemplate:
                   spec:
-                    storageClassName: longhorn
+                    storageClassName: "{{ monitoring_storage_class }}"
                     accessModes: ["ReadWriteOnce"]
                     resources:
                       requests:
@@ -195,7 +281,7 @@
             adminPassword: "{{ grafana_admin_password }}"
             persistence:
               enabled: true
-              storageClassName: longhorn
+              storageClassName: "{{ monitoring_storage_class }}"
               size: 5Gi
             # The Grafana subchart defaults to RollingUpdate, which deadlocks
             # against a ReadWriteOnce Longhorn volume: with one replica the
@@ -262,12 +348,17 @@
         kind: Event
         namespace: "{{ monitoring_namespace }}"
       register: monitoring_events
+    # A pod wedged on a volume shows up as Init:0/1 with an empty init
+    # container state, so print both sets of statuses rather than guessing.
     - name: Show pods that never became ready
       ansible.builtin.debug:
         msg: >-
           {{ item.metadata.name }}
           phase={{ item.status.phase | default('?') }}
           node={{ item.spec.nodeName | default('unscheduled') }}
+          init={{ item.status.initContainerStatuses | default([])
+                  | selectattr('state.waiting', 'defined')
+                  | map(attribute='state.waiting.reason') | list }}
           waiting={{ item.status.containerStatuses | default([])
                      | selectattr('state.waiting', 'defined')
                      | map(attribute='state.waiting.reason') | list }}
@@ -278,13 +369,17 @@
         (item.status.conditions | default([])
          | selectattr('type', 'equalto', 'Ready')
          | map(attribute='status') | first | default('False')) != 'True'
-    - name: Show claims that never bound (Longhorn is the usual suspect)
+    # Bound is not the same as attached: a claim can sit here looking healthy
+    # while the pod waits forever for the volume, so print the class too.
+    - name: Show every claim and its class
       ansible.builtin.debug:
-        msg: "{{ item.metadata.name }} phase={{ item.status.phase | default('?') }}"
+        msg: >-
+          {{ item.metadata.name }}
+          phase={{ item.status.phase | default('?') }}
+          class={{ item.spec.storageClassName | default('(default)') }}
       loop: "{{ monitoring_pvcs.resources | default([]) }}"
       loop_control:
         label: "{{ item.metadata.name }}"
-      when: (item.status.phase | default('')) != 'Bound'
     - name: Show recent warning events
       ansible.builtin.debug:
         msg: >-
@@ -300,10 +395,12 @@
       ansible.builtin.fail:
         msg: >-
           The monitoring stack did not come up (see the pod/PVC/event dump
-          above). Most likely one of: a Longhorn PVC that will not bind or
-          attach; node-exporter unable to bind host port 9100 because a
-          node already runs one (it uses hostNetwork); an image pull failure;
-          or a Grafana rollout stuck on its ReadWriteOnce volume.
+          above). Most likely one of: a volume that binds but never attaches,
+          which looks like pods stuck in Init with a Bound claim (re-run with
+          -e monitoring_reset_storage=true to clear the old claims out);
+          node-exporter unable to bind host port 9100 because a node already
+          runs one (it uses hostNetwork); an image pull failure; or a Grafana
+          rollout stuck on its ReadWriteOnce volume.
   # A small, human-readable set of extra alerts on top of the stack defaults.
   # These are the failures you actually want to hear about on a homelab.
   - name: Apply minimal homelab alert rules
