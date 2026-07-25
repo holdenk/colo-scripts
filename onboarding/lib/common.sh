@@ -65,9 +65,14 @@ as_root() {
 }
 
 # fully_qualify <name>  -- echo "<name>.<domain>" unless it already looks
-# fully-qualified (contains a dot).
+# fully-qualified (contains a dot). Rejects anything that isn't a plausible
+# hostname: a stray space or shell metacharacter would otherwise ride into
+# /etc/hostname, the cloud-init seed, and the Jetson seed `config` file that
+# the first-boot service sources as root.
 fully_qualify() {
   local name="$1"
+  [[ "$name" =~ ^[a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?$ ]] \
+    || die "invalid hostname '$name' (letters, digits, '-' and '.' only)"
   if [[ "$name" == *.* ]]; then
     printf '%s\n' "$name"
   else
@@ -123,7 +128,12 @@ emit_cloud_init_bootstrap_user() {
   printf '    ssh_authorized_keys:\n'
   while IFS= read -r line; do
     [[ -n "$line" ]] || continue
-    printf '      - "%s"\n' "$line"
+    # YAML single-quoted style: everything is literal except '' (an escaped
+    # quote). Key *comments* are free-form and may contain " or \ (e.g.
+    # ssh-keygen -C 'my "work" laptop'), which double-quoted style would turn
+    # into unparseable YAML -- cloud-init would then silently skip user
+    # creation and the node would boot with no way in.
+    printf "      - '%s'\n" "${line//\'/\'\'}"
   done <"$keyfile"
 }
 
