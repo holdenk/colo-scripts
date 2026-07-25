@@ -137,3 +137,14 @@ playbooks/buffer
 # ignore auth stuff
 auth
 playbooks/auth
+
+# onboarding image build cache and generated images
+onboarding/.cache/
+onboarding/*.img
+pi-*.img
+jetson-*.img
+
+# ...but the onboarding shared shell lib is source, not a python build dir
+# (the unanchored `lib/` above comes from python boilerplate and matches at
+# any depth; this negation re-includes the directory and everything in it)
+!onboarding/lib/
