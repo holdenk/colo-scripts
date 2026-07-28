@@ -2,7 +2,7 @@
 
 ;-----;pigscanfly.ca;
 pigscanfly.ca. 300 IN SOA ns.rackspace.com. holden.karau.gmail.com. (
-1785203224
+1618712321
 21600
 3600
 1814400
@@ -45,9 +45,4 @@ pigscanfly.ca. 300 IN MX 200 pigscanfly.ca.
 *.pigscanfly.ca. 300 IN MX 200 pigscanfly.ca.
 pigscanfly.ca. 300 IN TXT "google-site-verification=yDZ5OkDOnJGiSGJZ8ixJhfOTS2bcVO4MyDRKTezdTbs"
 20160214._domainkey.pigscanfly.ca. 300 IN TXT "k=rsa; p=MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEArOEY4ixCpm4yVzj5LjUt8XtgujG3AMUnh4QMQJ+Rw10bYJEfnL5pleHztn/DWWTgsPIR/qMd5y8U6BF1MlC64+debbVPUR3sm58IhlZNphXhamqpWnOKDY9AR9BZKTRu4MAZkL3LsMRon3L6cEy0DK/maBLS31PT0e5NK+CFo4lFeohsTVaVOg72kf0FYl0CYR+Blqq/MX" "BWXPiDh9+q6Y2xHnUQGiLdaaQBHe4Ur2jBf8eNlst14Wu4vCC6IviLay2p8w033Zn8yEJUW+M4qoYe7Daf0zQkfNf6ZE/hkykrDkGXQY828OK6fjWI/7RmRQCMaAVOAar6itUpTjbDGQIDAQAB"
-; SPF, i.e. who may put @pigscanfly.ca on the From line: Google (the mailboxes),
-; the MX host itself (pcfweb relays through it, see pcfweb's docs/email.md), and
-; SendGrid -- which Alertmanager (playbooks/monitoring.yaml) and the health
-; stack's EMAIL_HOST (playbooks/cluster-setup.yaml) were already sending
-; through while unlisted, so their mail soft-failed SPF into spam folders.
-pigscanfly.ca. 300 IN TXT "v=spf1 include:_spf.google.com include:sendgrid.net mx ip4:71.19.157.174 ~all"
+pigscanfly.ca. 300 IN TXT "v=spf1 include:_spf.google.com mx ip4:71.19.157.174 ~all"
