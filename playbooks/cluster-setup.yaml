@@ -74,6 +74,17 @@
           DBHOST: "nani.pigscanfly.ca"
           __ENV__: "Prod"
           ENVIRONMENT: "Prod"
+          # The secret half of pcfweb's outbound mail. The rest of the pair --
+          # EMAIL_HOST / EMAIL_PORT / EMAIL_USE_TLS / EMAIL_USE_SSL /
+          # EMAIL_HOST_USER -- lives in the pcfweb-db-config ConfigMap in the
+          # pcfweb repo's deploy.yaml, which is listed after this Secret in
+          # envFrom and therefore wins. Today that pair says pigscanfly.ca:25
+          # STARTTLS as user "support", so this vault value is that account's
+          # password; empty just turns SMTP AUTH off. Pointing pcfweb at
+          # SendGrid instead is a ConfigMap edit there (user becomes "apikey")
+          # plus the API key here -- the SPF record in
+          # files/bind-zones/pigscanfly.ca. already lists sendgrid.net.
+          # Details: docs/email.md in the pcfweb repo.
           EMAIL_HOST_PASSWORD: "{{pcf_email_host_password}}"
       state: present
   - name: Create spacebeaver secrets
