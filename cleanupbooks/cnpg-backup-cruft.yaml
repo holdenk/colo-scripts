@@ -1,0 +1,61 @@
+---
+# One-time cleanup for the July 2026 CNPG backup/reconciliation incident:
+#   1. delete the orphaned `backup-example` ScheduledBackup (a CNPG docs
+#      example applied ~Nov 2025) plus its ~240 forever-pending Backup CRs in
+#      the `default` namespace -- all target the DEAD fhi-pg-main-7 cluster,
+#      and the operator's catch-up storm on them starves scheduling for every
+#      other ScheduledBackup in the cluster;
+#   2. remove the duplicate MANIFEST-based barman-cloud plugin install in
+#      cnpg-system (deployment/service `barman-cloud`), keeping the
+#      helm-managed release (`barman-cloud-plugin-barman-cloud`) that
+#      playbooks/cluster-setup.yaml owns -- the two copies deadlock on the
+#      plugin leader lease and block cluster reconciliation.
+#
+# Every destructive step is guarded; the play fails instead of deleting
+# anything unexpected. Deleting Backup CRs never touches object-store data.
+# CRDs (barmancloud.cnpg.io) are deliberately NOT touched: deleting the
+# ObjectStore CRD would cascade-delete fhi-backup-store-9.
+#
+# Full context + validation:
+#   fighthealthinsurance/docs/pg-backup-reconciliation-runbook-2026-07.md
+- hosts: localhost
+  tasks:
+  - name: Guard - every Backup in default must target the dead fhi-pg-main-7
+    ansible.builtin.shell: |
+      set -euo pipefail
+      unexpected="$(kubectl -n default get backup \
+        -o custom-columns='NAME:.metadata.name,CLUSTER:.spec.cluster.name' \
+        --no-headers 2>/dev/null | awk '$2 != "fhi-pg-main-7"' || true)"
+      if [ -n "$unexpected" ]; then
+        echo "REFUSING: default ns holds Backups for other clusters:"; echo "$unexpected"; exit 1
+      fi
+      echo "ok: all default-ns Backups target fhi-pg-main-7"
+    args:
+      executable: /bin/bash
+  - name: Delete the orphaned backup-example ScheduledBackup
+    ansible.builtin.shell: "kubectl -n default delete scheduledbackup backup-example --ignore-not-found"
+  - name: Delete the dead fhi-pg-main-7 Backup CRs (CRs only, no bucket data)
+    ansible.builtin.shell: "kubectl -n default delete backup --all --timeout=300s"
+  - name: Guard then delete the duplicate manifest-based plugin deployment+service
+    ansible.builtin.shell: |
+      set -euo pipefail
+      for kind in deployment service; do
+        if kubectl -n cnpg-system get "$kind" barman-cloud >/dev/null 2>&1; then
+          owner="$(kubectl -n cnpg-system get "$kind" barman-cloud \
+            -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}')"
+          if [ -n "$owner" ]; then
+            echo "REFUSING: $kind/barman-cloud is helm-owned by release '$owner'"; exit 1
+          fi
+          kubectl -n cnpg-system delete "$kind" barman-cloud
+        else
+          echo "$kind/barman-cloud already gone"
+        fi
+      done
+    args:
+      executable: /bin/bash
+  - name: Free the plugin leader lease so the helm pod can take over
+    ansible.builtin.shell: "kubectl -n cnpg-system delete lease 822e3f5c.cnpg.io --ignore-not-found"
+  - name: Wait for the helm-managed plugin to become ready
+    ansible.builtin.shell: "kubectl -n cnpg-system rollout status deploy/barman-cloud-plugin-barman-cloud --timeout=180s"
+  - name: Show cluster reconciliation status (should clear to healthy within ~3m)
+    ansible.builtin.shell: "kubectl get cluster --all-namespaces"
