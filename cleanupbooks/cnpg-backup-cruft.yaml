@@ -1,24 +1,32 @@
 ---
-# Cleanup + convergence for the July 2026 CNPG backup/reconciliation incident:
-#   1. delete the orphaned `backup-example` ScheduledBackup (a CNPG docs
-#      example applied ~Nov 2025) plus its ~240 forever-pending Backup CRs in
-#      the `default` namespace -- all target the DEAD fhi-pg-main-7 cluster,
-#      and the operator's catch-up storm on them starves scheduling for every
-#      other ScheduledBackup in the cluster;
-#   2. converge cnpg-system to EXACTLY ONE barman-cloud plugin install: the
-#      helm release `barman-cloud` that playbooks/cluster-setup.yaml owns.
-#      Everything plugin-shaped that is NOT owned by that release is purged
-#      (manifest-based leftovers), then the release is upgrade--installed at
-#      the pinned chart version. Duplicate installs deadlock on the plugin
-#      leader lease AND fight over the SHARED Service name `barman-cloud`
-#      (the chart hardcodes it), which is what blocked cluster reconciliation.
+# Cleanup for the July 2026 CNPG backup/reconciliation incident. CLEANUP
+# ONLY -- this book tears down; it deliberately installs NOTHING. Reinstall
+# by re-running playbooks/cluster-setup.yaml afterwards (its pinned helm task
+# recreates the plugin cleanly).
 #
-# Idempotent: on a healthy system the purge matches nothing and the helm task
-# no-ops. Deleting Backup CRs never touches object-store data. CRDs
-# (barmancloud.cnpg.io) are never touched -- deleting the ObjectStore CRD
-# would cascade-delete fhi-backup-store-9; they also carry
-# helm.sh/resource-policy: keep. Secrets are skipped too: cert-manager owns
-# and re-issues the TLS secrets from the Certificates.
+#   1. delete the orphaned `backup-example` ScheduledBackup plus its ~240
+#      forever-pending Backup CRs in `default` -- all target the DEAD
+#      fhi-pg-main-7 cluster, and the operator's catch-up storm on them
+#      starves scheduling for every other ScheduledBackup in the cluster;
+#   2. remove the barman-cloud plugin ENTIRELY: the helm release AND any
+#      manifest-based leftovers. Several resource names (Service
+#      `barman-cloud`, the client/server Certificates, the sidecar
+#      ConfigMap) are IDENTICAL across the two install methods, so partial
+#      name-based deletes leave a broken mix (this bit us live on
+#      2026-07-30: the one shared discovery Service went away and the
+#      operator lost its plugin endpoint). Teardown must be total, then
+#      reinstall fresh via cluster-setup.yaml.
+#
+# NEVER touched:
+#   - the barmancloud.cnpg.io CRDs: deleting the ObjectStore CRD would
+#     cascade-delete fhi-backup-store-9 (they also carry
+#     helm.sh/resource-policy: keep);
+#   - Secrets: cert-manager re-issues/overwrites the TLS secrets when the
+#     fresh install recreates the Certificates.
+#
+# Postgres itself keeps running throughout: instance availability does not
+# depend on the plugin deployment (only archiving/backup control does).
+# Deleting Backup CRs never touches object-store data.
 #
 # Full context + validation:
 #   fighthealthinsurance/docs/pg-backup-reconciliation-runbook-2026-07.md
@@ -40,45 +48,36 @@
     ansible.builtin.shell: "kubectl -n default delete scheduledbackup backup-example --ignore-not-found"
   - name: Delete the dead fhi-pg-main-7 Backup CRs (CRs only, no bucket data)
     ansible.builtin.shell: "kubectl -n default delete backup --all --timeout=300s"
-  - name: Purge plugin resources not owned by the barman-cloud helm release (never CRDs or Secrets)
+  - name: Uninstall the barman-cloud helm release (ok if absent)
+    ansible.builtin.shell: "helm -n cnpg-system uninstall barman-cloud || echo 'release not present'"
+  - name: Purge every remaining plugin resource (never CRDs, never Secrets)
     ansible.builtin.shell: |
       set -euo pipefail
       for r in $(kubectl -n cnpg-system get deploy,svc,cm,sa,role,rolebinding,certificate,issuer -o name 2>/dev/null | grep -i barman || true); do
-        owner="$(kubectl -n cnpg-system get "$r" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)"
-        if [ "$owner" = "barman-cloud" ]; then
-          echo "keep  $r (helm-owned)"
-        else
-          echo "purge $r (owner='$owner')"; kubectl -n cnpg-system delete "$r"
-        fi
+        kubectl -n cnpg-system delete "$r"
       done
       for r in $(kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null | grep -i barman || true); do
-        owner="$(kubectl get "$r" -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-name}' 2>/dev/null || true)"
-        if [ "$owner" = "barman-cloud" ]; then
-          echo "keep  $r (helm-owned)"
-        else
-          echo "purge $r (owner='$owner')"; kubectl delete "$r"
-        fi
+        kubectl delete "$r"
       done
     args:
       executable: /bin/bash
-  - name: Install or converge the pinned helm release (must match cluster-setup.yaml pin)
+  - name: Verify teardown is total and the ObjectStore CRs survived
     ansible.builtin.shell: |
       set -euo pipefail
-      helm repo add cnpg https://cloudnative-pg.github.io/charts 2>/dev/null || true
-      helm repo update cnpg >/dev/null
-      helm -n cnpg-system upgrade --install barman-cloud cnpg/plugin-barman-cloud \
-        --version 0.7.0 --wait --timeout 5m \
-      || helm -n cnpg-system upgrade --install barman-cloud cnpg/plugin-barman-cloud \
-        --version 0.7.0 --wait --timeout 5m --set crds.create=false
-    args:
-      executable: /bin/bash
-  - name: Verify the plugin discovery Service and CRD survived
-    ansible.builtin.shell: |
-      set -euo pipefail
-      kubectl -n cnpg-system get svc barman-cloud -o jsonpath='{.metadata.labels.cnpg\.io/pluginName}{"\n"}' | grep -q barman-cloud.cloudnative-pg.io
+      left="$(kubectl -n cnpg-system get deploy,svc,cm,sa,role,rolebinding,certificate,issuer -o name 2>/dev/null | grep -i barman || true)"
+      if [ -n "$left" ]; then
+        echo "STILL PRESENT after purge:"; echo "$left"; exit 1
+      fi
       kubectl get crd objectstores.barmancloud.cnpg.io >/dev/null
-      kubectl -n cnpg-system rollout status deploy/barman-cloud-plugin-barman-cloud --timeout=180s
+      kubectl -n totallylegitco get objectstore
+      echo "cleanup complete: plugin fully removed, ObjectStore CRD + CRs intact"
     args:
       executable: /bin/bash
-  - name: Show cluster reconciliation status (should clear to healthy within ~3m)
-    ansible.builtin.shell: "kubectl get cluster --all-namespaces"
+  - name: Next step reminder (this book installs nothing)
+    ansible.builtin.shell: |
+      echo "Now re-run playbooks/cluster-setup.yaml to reinstall the plugin"
+      echo "(pinned chart 0.7.0, wait: yes), then verify:"
+      echo "  kubectl -n cnpg-system get deploy,svc | grep barman"
+      echo "  kubectl get cluster --all-namespaces"
+    args:
+      executable: /bin/bash
