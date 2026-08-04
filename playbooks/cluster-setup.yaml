@@ -390,18 +390,43 @@
       src: "{{ playbook_dir }}/../metallb-config.yaml"
       wait: yes
       wait_timeout: 120
+  # CNPG chart versions are PINNED on purpose. These two tasks used to be
+  # unpinned, so the 2026-07-18 playbook run silently upgraded the operator
+  # AND installed a second copy of the barman-cloud plugin next to the older
+  # manifest-based install; the two copies deadlocked on the plugin's leader
+  # lease (822e3f5c.cnpg.io) and every CNPG cluster using the plugin stopped
+  # reconciling ("error while interacting with plugins") for 12 days. See
+  # fighthealthinsurance/docs/pg-backup-reconciliation-runbook-2026-07.md.
+  #
+  # Rules:
+  #   - helm (these tasks) is the ONLY installer for the operator and the
+  #     plugin. Never `kubectl apply` the plugin release manifest.yaml -- that
+  #     is how the duplicate install was born.
+  #   - upgrades are deliberate pin bumps, one component at a time. Before
+  #     bumping the plugin, read its release notes for Service-selector and
+  #     sidecar changes (the v0.9->v0.13 selector break caused the -8 outage)
+  #     and verify endpoints + a completed Backup afterwards
+  #     (fighthealthinsurance/scripts/check-pg9-backup-health.sh).
+  #   - wait: yes makes a wedged rollout (e.g. a pod stuck 0/1 waiting on the
+  #     leader lease) fail THIS playbook loudly instead of rotting unnoticed.
   - name: Deploy cloud native postgres
     kubernetes.core.helm:
       name: cnpg
       chart_ref: cnpg/cloudnative-pg
+      chart_version: 0.29.0  # operator 1.30.0 (matches live since 2026-07-18)
       release_namespace: cnpg-system
       create_namespace: true
+      wait: yes
+      wait_timeout: 300s
   - name: Deploy cloud native postgres backup plugin
     kubernetes.core.helm:
       name: barman-cloud
       chart_ref: cnpg/plugin-barman-cloud
+      chart_version: 0.7.0  # plugin v0.13.0 (matches live + the -9 sidecars)
       release_namespace: cnpg-system
       create_namespace: true
+      wait: yes
+      wait_timeout: 300s
   - name: Deploy nginx
     kubernetes.core.helm:
       name: ingress-nginx

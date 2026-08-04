@@ -1,0 +1,83 @@
+---
+# Cleanup for the July 2026 CNPG backup/reconciliation incident. CLEANUP
+# ONLY -- this book tears down; it deliberately installs NOTHING. Reinstall
+# by re-running playbooks/cluster-setup.yaml afterwards (its pinned helm task
+# recreates the plugin cleanly).
+#
+#   1. delete the orphaned `backup-example` ScheduledBackup plus its ~240
+#      forever-pending Backup CRs in `default` -- all target the DEAD
+#      fhi-pg-main-7 cluster, and the operator's catch-up storm on them
+#      starves scheduling for every other ScheduledBackup in the cluster;
+#   2. remove the barman-cloud plugin ENTIRELY: the helm release AND any
+#      manifest-based leftovers. Several resource names (Service
+#      `barman-cloud`, the client/server Certificates, the sidecar
+#      ConfigMap) are IDENTICAL across the two install methods, so partial
+#      name-based deletes leave a broken mix (this bit us live on
+#      2026-07-30: the one shared discovery Service went away and the
+#      operator lost its plugin endpoint). Teardown must be total, then
+#      reinstall fresh via cluster-setup.yaml.
+#
+# NEVER touched:
+#   - the barmancloud.cnpg.io CRDs: deleting the ObjectStore CRD would
+#     cascade-delete fhi-backup-store-9 (they also carry
+#     helm.sh/resource-policy: keep);
+#   - Secrets: cert-manager re-issues/overwrites the TLS secrets when the
+#     fresh install recreates the Certificates.
+#
+# Postgres itself keeps running throughout: instance availability does not
+# depend on the plugin deployment (only archiving/backup control does).
+# Deleting Backup CRs never touches object-store data.
+#
+# Full context + validation:
+#   fighthealthinsurance/docs/pg-backup-reconciliation-runbook-2026-07.md
+- hosts: localhost
+  tasks:
+  - name: Guard - every Backup in default must target the dead fhi-pg-main-7
+    ansible.builtin.shell: |
+      set -euo pipefail
+      unexpected="$(kubectl -n default get backup \
+        -o custom-columns='NAME:.metadata.name,CLUSTER:.spec.cluster.name' \
+        --no-headers 2>/dev/null | awk '$2 != "fhi-pg-main-7"' || true)"
+      if [ -n "$unexpected" ]; then
+        echo "REFUSING: default ns holds Backups for other clusters:"; echo "$unexpected"; exit 1
+      fi
+      echo "ok: all default-ns Backups target fhi-pg-main-7"
+    args:
+      executable: /bin/bash
+  - name: Delete the orphaned backup-example ScheduledBackup
+    ansible.builtin.shell: "kubectl -n default delete scheduledbackup backup-example --ignore-not-found"
+  - name: Delete the dead fhi-pg-main-7 Backup CRs (CRs only, no bucket data)
+    ansible.builtin.shell: "kubectl -n default delete backup --all --timeout=300s"
+  - name: Uninstall the barman-cloud helm release (ok if absent)
+    ansible.builtin.shell: "helm -n cnpg-system uninstall barman-cloud || echo 'release not present'"
+  - name: Purge every remaining plugin resource (never CRDs, never Secrets)
+    ansible.builtin.shell: |
+      set -euo pipefail
+      for r in $(kubectl -n cnpg-system get deploy,svc,cm,sa,role,rolebinding,certificate,issuer -o name 2>/dev/null | grep -i barman || true); do
+        kubectl -n cnpg-system delete "$r"
+      done
+      for r in $(kubectl get clusterrole,clusterrolebinding -o name 2>/dev/null | grep -i barman || true); do
+        kubectl delete "$r"
+      done
+    args:
+      executable: /bin/bash
+  - name: Verify teardown is total and the ObjectStore CRs survived
+    ansible.builtin.shell: |
+      set -euo pipefail
+      left="$(kubectl -n cnpg-system get deploy,svc,cm,sa,role,rolebinding,certificate,issuer -o name 2>/dev/null | grep -i barman || true)"
+      if [ -n "$left" ]; then
+        echo "STILL PRESENT after purge:"; echo "$left"; exit 1
+      fi
+      kubectl get crd objectstores.barmancloud.cnpg.io >/dev/null
+      kubectl -n totallylegitco get objectstore
+      echo "cleanup complete: plugin fully removed, ObjectStore CRD + CRs intact"
+    args:
+      executable: /bin/bash
+  - name: Next step reminder (this book installs nothing)
+    ansible.builtin.shell: |
+      echo "Now re-run playbooks/cluster-setup.yaml to reinstall the plugin"
+      echo "(pinned chart 0.7.0, wait: yes), then verify:"
+      echo "  kubectl -n cnpg-system get deploy,svc | grep barman"
+      echo "  kubectl get cluster --all-namespaces"
+    args:
+      executable: /bin/bash
