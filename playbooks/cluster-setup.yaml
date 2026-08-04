@@ -66,15 +66,51 @@
           STRIPE_TEST_SECRET_KEY: "{{PCF_STRIPE_TEST_SECRET_KEY}}"
           STRIPE_TEST_PUBLIC_KEY: "{{PCF_STRIPE_TEST_PUBLIC_KEY}}"
           DJSTRIPE_WEBHOOK_SECRET: "{{PCF_DJSTRIPE_WEBHOOK_SECRET}}"
+          STRIPE_WEBHOOK_SECRET: "{{PCF_DJSTRIPE_WEBHOOK_SECRET}}"
           DJANGO_CONFIGURATION: "Prod"
           SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
-          DBUSER: "pcfweb"
-          DBNAME: "pcf-web"
-          DBPASSWORD: "{{pcfweb_db_pw}}"
-          DBHOST: "nani.pigscanfly.ca"
           __ENV__: "Prod"
           ENVIRONMENT: "Prod"
           EMAIL_HOST_PASSWORD: "{{pcf_email_host_password}}"
+          DBPASSWORD: "{{pcfweb_db_pw}}"
+      state: present
+  - name: Create pcfweb DB secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        type: kubernetes.io/basic-auth
+        metadata:
+          name: pcfweb-internal-pg-secret
+          namespace: pcfweb
+        stringData:
+          username: "pigscanfly"
+          password: "{{pcfweb_db_pw}}"
+      state: present
+  - name: Create pcfweb DB secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        type: kubernetes.io/basic-auth
+        metadata:
+          name: pcfweb-superuser-pg-secret
+          namespace: pcfweb
+        stringData:
+          username: "postgres"
+          password: "{{pcfweb_su_db_pw}}"
+      state: present
+  - name: Create pcfweb backup secret
+    community.kubernetes.k8s:
+      definition:
+        apiVersion: v1
+        kind: Secret
+        metadata:
+          name: pcfweb-pg-backup
+          namespace: pcfweb
+        stringData:
+          PG_ACCESS_KEY_ID: "{{pcfweb_b2_id}}"
+          PG_ACCESS_SECRET_KEY: "{{pcfweb_b2_secret}}"
       state: present
   - name: Create spacebeaver secrets
     community.kubernetes.k8s:
