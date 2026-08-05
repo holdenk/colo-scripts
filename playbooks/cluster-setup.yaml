@@ -73,6 +73,22 @@
           ENVIRONMENT: "Prod"
           EMAIL_HOST_PASSWORD: "{{pcf_email_host_password}}"
           DBPASSWORD: "{{pcfweb_db_pw}}"
+          # The Django admin account. pcfweb's primary pod runs
+          # `manage.py ensure_admin_account` on every boot: it creates the
+          # superuser on a fresh database and converges it afterwards, so a
+          # password rotated here (vault edit + re-run this playbook + roll
+          # web-primary) actually takes effect. The variable names are the
+          # ones Django's own `createsuperuser --noinput` reads.
+          #
+          # default('') so this playbook still runs before the vault entries
+          # exist -- add PCF_ADMIN_USER, PCF_ADMIN_PASSWORD and (optional)
+          # PCF_ADMIN_EMAIL to passwd.yml to enable. Empty values make the
+          # app skip admin setup with a log line; user or password set
+          # without the other makes the app complain loudly in the primary
+          # pod's log, since that is usually a typo'd vault key.
+          DJANGO_SUPERUSER_USERNAME: "{{PCF_ADMIN_USER | default('')}}"
+          DJANGO_SUPERUSER_PASSWORD: "{{PCF_ADMIN_PASSWORD | default('')}}"
+          DJANGO_SUPERUSER_EMAIL: "{{PCF_ADMIN_EMAIL | default('')}}"
       state: present
   - name: Create pcfweb DB secret
     community.kubernetes.k8s:
