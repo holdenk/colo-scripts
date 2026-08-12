@@ -71,6 +71,17 @@
           SECRET_KEY: "{{SPACEBEAVER_DJANGO_SECRET_KEY}}"
           __ENV__: "Prod"
           ENVIRONMENT: "Prod"
+          # The secret half of pcfweb's outbound mail. The rest of the pair --
+          # EMAIL_HOST / EMAIL_PORT / EMAIL_USE_TLS / EMAIL_USE_SSL /
+          # EMAIL_HOST_USER -- lives in the pcfweb-db-config ConfigMap in the
+          # pcfweb repo's deploy.yaml, which is listed after this Secret in
+          # envFrom and therefore wins. That pair says mail.pigscanfly.ca:465
+          # (submissions, TLS from the first byte) as user "support" -- the
+          # domain's own mail server, by its MX name because the apex is
+          # Cloudflare-proxied and carries no SMTP -- so this vault value is
+          # that account's password; empty just turns SMTP AUTH off. Details,
+          # including the live-DNS story (the bind-zones/ copies here are
+          # retired): docs/email.md in the pcfweb repo.
           EMAIL_HOST_PASSWORD: "{{pcf_email_host_password}}"
           DBPASSWORD: "{{pcfweb_db_pw}}"
           # The Django admin account. pcfweb's primary pod runs
