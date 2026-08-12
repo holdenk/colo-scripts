@@ -33,3 +33,14 @@ ecryptfs_fstab_opts: "noauto,{{ ecryptfs_common_opts | regex_replace('\\s+', '')
 
 # Live mount: prepend the passphrase (from passwd.yml vault: ecrypt_pw).
 ecryptfs_mount_opts: "key=passphrase:passphrase_passwd={{ ecrypt_pw }},{{ ecryptfs_common_opts | regex_replace('\\s+', '') }}"
+
+# Traversal group for the encrypted mount root. On the fax host we stage PII
+# fax payloads under {{ ecryptfs_mount_dir }}/fax and reach them as a non-root
+# service user (the "ray" user, see playbooks/fax-setup.yaml). A 0700 root:root
+# mount root blocks that user from even traversing into its own subdirectory,
+# so on hosts in the "fax" inventory group the mount root is owned
+# root:{{ ecryptfs_fax_group }} with mode 0710 -- the group may traverse (x)
+# but never list (r), everyone else is denied, and root keeps full access.
+# Every other host keeps the default root:root 0700 (see ecrypt.yaml /
+# ecrypt-ensure.yaml, which apply this only where 'fax' in group_names).
+ecryptfs_fax_group: fax

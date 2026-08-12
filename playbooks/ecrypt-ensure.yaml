@@ -27,21 +27,34 @@
       loop: "{{ ecryptfs_modules }}"
       ignore_errors: true  # fine if built-in or differently named
 
+    - name: Ensure the fax traversal group exists (fax host only)
+      ansible.builtin.group:
+        name: "{{ ecryptfs_fax_group }}"
+        state: present
+      when: "'fax' in group_names"
+
     - name: Ensure backing directory exists
       ansible.builtin.file:
         path: "{{ ecryptfs_backing_dir }}"
         state: directory
         owner: root
-        group: root
-        mode: "0700"
+        # The mounted {{ ecryptfs_mount_dir }} root inherits its attributes
+        # from this (lower) directory's inode, so the fax-host traversal perms
+        # must match the mount-dir task below -- otherwise a fresh mount comes
+        # up 0700 root:root and the fax user loses access until the next run.
+        group: "{{ ecryptfs_fax_group if 'fax' in group_names else 'root' }}"
+        mode: "{{ '0710' if 'fax' in group_names else '0700' }}"
 
     - name: Ensure mount directory exists
       ansible.builtin.file:
         path: "{{ ecryptfs_mount_dir }}"
         state: directory
         owner: root
-        group: root
-        mode: "0700"
+        # On the fax host let the fax group traverse (x, never list) the mount
+        # root so the fax service user can reach {{ ecryptfs_mount_dir }}/fax.
+        # Every other host keeps the default root:root 0700.
+        group: "{{ ecryptfs_fax_group if 'fax' in group_names else 'root' }}"
+        mode: "{{ '0710' if 'fax' in group_names else '0700' }}"
 
     # Presence of the canary means /db/encrypted is mounted. After a reboot the
     # (noauto) volume is not mounted, so the canary is gone -> we mount it.
