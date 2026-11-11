@@ -271,6 +271,9 @@
           name: fight-health-insurance-secret
           namespace: totallylegitco
         stringData:
+          TEMPORAL_HOSTNAME: "{{TEMPORAL_HOSTNAME}}"
+          COFACTOR_INTRO_CONTACT: "{{COFACTOR_INTRO_CONTACT}}"
+          LUNA_ROUTE_KEY: "{{LUNA_ROUTE_KEY}}"
           RAG_SECRET_KEY: "{{RAG_SECRET_KEY}}"
           RAG_OPENSEARCH_PASSWORD: "{{RAG_OPENSEARCH_PASSWORD}}"
           PDBUSER: "{{FIGHT_HEALTH_PG_USER}}"
@@ -308,6 +311,7 @@
           SSL: "on"
           OPENAI_API_BASE: "https://api.endpoints.anyscale.com/v1"
           OPENAI_API_KEY: "{{OPENAI_API_KEY}}"
+          OPENROTUER_API_KEY: "{{OPENROUTER_API_KEY}}"
           RUNPOD_API_KEY: "{{RUNPOD_API_KEY}}"
           RUNPOD_ENDPOINT: "{{RUNPOD_ENDPOINT}}"
           HEALTH_BACKEND_HOST: "{{HEALTH_BACKEND_HOST}}"
@@ -319,7 +323,12 @@
           HEALTH_BACKUP_BACKEND_MODEL: "{{HEALTH_BACKUP_BACKEND_MODEL}}"
           TOGETHER_KEY: "{{TOGETHER_KEY}}"
           ANTHROPIC_API_KEY: "{{CLAUDE_API_KEY}}"
+          FHI_CHAT_JEV_GATE_ENABLED: "true"
+          SECONDARY_ANTHROPIC_API_KEY: "{{SECONDARY_CLAUDE_API_KEY}}"
           PERPLEXITY_API: "{{PERPLEXITY_API}}"
+          OPENCODE_TOKEN: "{{OPENCODE_TOKEN}}"
+          TEMPORAL_RESEARCH_PAYLOAD_KEY: "{{TEMPORAL_RESEARCH_PAYLOAD_KEY}}"
+          TEMPORAL_PAYLOAD_KEY: "{{TEMPORAL_PAYLOAD_KEY}}"
           OCTOAI_TOKEN: "{{OCTOAI_TOKEN}}"
           EMAIL_HOST: "smtp.sendgrid.net"
           EMAIL_HOST_PORT: "465"
